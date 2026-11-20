@@ -4,7 +4,7 @@ import 'package:http/testing.dart';
 import 'package:parent_app/core/pairing/pairing_preferences.dart';
 import 'package:parent_app/core/pairing/pairing_service.dart';
 
-const testToken64 = 'f' * 64;
+final testToken64 = 'f' * 64;
 
 void main() {
   PairingService serviceWith(MockClient client) => PairingService(

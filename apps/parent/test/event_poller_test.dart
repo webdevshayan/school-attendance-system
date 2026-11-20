@@ -53,6 +53,7 @@ void main() {
     });
     final poller = EventPoller(
       pairing: pairing,
+      prefs: prefs,
       push: handler,
       client: client,
       baseUrl: 'http://test.local',
@@ -82,6 +83,7 @@ void main() {
     });
     final poller = EventPoller(
       pairing: pairing,
+      prefs: prefs,
       push: handler,
       client: client,
       baseUrl: 'http://test.local',
@@ -106,6 +108,7 @@ void main() {
     });
     final poller = EventPoller(
       pairing: pairing,
+      prefs: prefs,
       push: handler,
       client: client,
       baseUrl: 'http://test.local',
@@ -133,6 +136,7 @@ void main() {
     });
     final poller = EventPoller(
       pairing: pairing,
+      prefs: prefs,
       push: handler,
       client: client,
       baseUrl: 'http://test.local',
@@ -159,6 +163,7 @@ void main() {
         client: client,
         baseUrl: 'http://test.local',
       ),
+      prefs: InMemoryPairingPreferences(),
       push: handler,
       client: client,
       baseUrl: 'http://test.local',

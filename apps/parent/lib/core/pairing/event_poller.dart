@@ -18,16 +18,19 @@ import 'pairing_service.dart';
 class EventPoller {
   EventPoller({
     required PairingService pairing,
+    required PairingPreferences prefs,
     required PushHandler push,
     http.Client? client,
     this.baseUrl = ChildConfig.serverBaseUrl,
     this.interval = ChildConfig.pollInterval,
     this.onRevoked,
   })  : _pairing = pairing,
+        _prefs = prefs,
         _push = push,
         _client = client ?? http.Client();
 
   final PairingService _pairing;
+  final PairingPreferences _prefs;
   final PushHandler _push;
   final http.Client _client;
   final String baseUrl;
@@ -66,7 +69,7 @@ class EventPoller {
     if (token == null || studentId == null) return;
     _inFlight = true;
     try {
-      final rawCursor = await _pairing.read(PairingKeys.cursor);
+      final rawCursor = await _prefs.read(PairingKeys.cursor);
       final since = int.tryParse(rawCursor ?? '') ?? 0;
       final response = await _client.get(
         Uri.parse('$baseUrl/api/events?since=$since'),
@@ -99,7 +102,7 @@ class EventPoller {
         }
       }
       if (cursor is int && cursor >= 0) {
-        await _pairing.write(PairingKeys.cursor, '$cursor');
+        await _prefs.write(PairingKeys.cursor, '$cursor');
       }
       lastError = null;
     } catch (_) {

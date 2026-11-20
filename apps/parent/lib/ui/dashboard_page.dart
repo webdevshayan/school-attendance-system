@@ -37,6 +37,7 @@ class _DashboardPageState extends State<DashboardPage> {
   StreamSubscription<AttendanceEvent>? _pushSub;
   PairingService? _pairing;
   EventPoller? _poller;
+  PairingPreferences? _pollerPrefs;
   String? _studentId;
   List<AttendanceEvent> _today = const [];
   bool _checkedInToday = false;
@@ -71,8 +72,10 @@ class _DashboardPageState extends State<DashboardPage> {
       // Pairing is optional infrastructure: a missing plugin layer degrades
       // to the debug fallback instead of blocking the whole dashboard.
       try {
-        final service = PairingService(prefs: SqflitePairingPreferences());
+        final prefs = SqflitePairingPreferences();
+        final service = PairingService(prefs: prefs);
         _pairing = service;
+        _pollerPrefs = prefs;
         _studentId = await service.pairedStudentId();
         _startPoller();
       } catch (_) {
@@ -90,10 +93,12 @@ class _DashboardPageState extends State<DashboardPage> {
   void _startPoller() {
     final push = _push;
     final service = _pairing;
-    if (push == null || service == null) return;
+    final prefs = _pollerPrefs;
+    if (push == null || service == null || prefs == null) return;
     _poller?.stop();
     final poller = EventPoller(
       pairing: service,
+      prefs: prefs,
       push: push,
       onRevoked: () => _reloadPairing(),
     );
