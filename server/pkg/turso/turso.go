@@ -45,9 +45,28 @@ type Client struct {
 // a slow database cannot pin a serverless function until its limit.
 func New(baseURL, token string) *Client {
 	return &Client{
-		BaseURL: strings.TrimRight(baseURL, "/"),
+		// Turso hands out libsql:// URLs and the v2 pipeline API is plain
+		// HTTPS on the same host - normalize instead of making callers
+		// rewrite the canonical form (live incident 2026-11-20: the
+		// un-normalized libsql:// scheme produced
+		// "unsupported protocol scheme" at request time).
+		BaseURL: normalizeBaseURL(baseURL),
 		Token:   token,
 		HTTP:    &http.Client{Timeout: 10 * time.Second},
+	}
+}
+
+// normalizeBaseURL turns the canonical Turso forms (libsql://host or a bare
+// host) into the https:// URL the pipeline client needs.
+func normalizeBaseURL(baseURL string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	switch {
+	case strings.HasPrefix(baseURL, "libsql://"):
+		return "https://" + strings.TrimPrefix(baseURL, "libsql://")
+	case !strings.Contains(baseURL, "://"):
+		return "https://" + baseURL
+	default:
+		return baseURL
 	}
 }
 
