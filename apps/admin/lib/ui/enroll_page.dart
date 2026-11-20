@@ -64,15 +64,15 @@ class _EnrollPageState extends State<EnrollPage> {
       return;
     }
     setState(() => _busy = true);
-    File? shot;
+    String? shotPath;
     try {
-      shot = await camera.takePicture();
+      shotPath = (await camera.takePicture()).path;
       final id = _idController.text.trim().isEmpty
           ? 's_${DateTime.now().millisecondsSinceEpoch}'
           : _idController.text.trim();
       await widget.face.register(
         studentId: id,
-        imagePath: shot.path,
+        imagePath: shotPath,
         name: name,
       );
       await widget.store.addStudent(
@@ -90,9 +90,9 @@ class _EnrollPageState extends State<EnrollPage> {
     } catch (error) {
       _snack('Enrollment failed: $error');
     } finally {
-      if (shot != null) {
+      if (shotPath != null) {
         try {
-          await shot.delete();
+          await File(shotPath).delete();
         } catch (_) {}
       }
       if (mounted) setState(() => _busy = false);

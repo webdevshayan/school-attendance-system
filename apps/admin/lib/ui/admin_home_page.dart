@@ -133,10 +133,10 @@ class _AdminHomePageState extends State<AdminHomePage> {
       return;
     }
     _capturing = true;
-    File? shot;
+    String? shotPath;
     try {
-      shot = await camera.takePicture();
-      final matchId = await _face.verify(shot.path);
+      shotPath = (await camera.takePicture()).path;
+      final matchId = await _face.verify(shotPath);
       if (matchId == null) {
         setState(() => _status = 'No enrolled match in frame');
         return;
@@ -162,9 +162,9 @@ class _AdminHomePageState extends State<AdminHomePage> {
       // A failed frame must never take the door loop down.
       setState(() => _status = 'Capture error (kept going): $error');
     } finally {
-      if (shot != null) {
+      if (shotPath != null) {
         try {
-          await shot.delete();
+          await File(shotPath).delete();
         } catch (_) {}
       }
       _capturing = false;
