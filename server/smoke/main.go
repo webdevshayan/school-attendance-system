@@ -181,6 +181,9 @@ func main() {
 	if err == nil && (status != http.StatusOK || len(pairingCode) != 8) {
 		step("codes", fmt.Errorf("HTTP %d body %s", status, body))
 	}
+	// The code is ephemeral (7-day TTL) and non-sensitive; printing it makes
+	// mint/pair mismatches diagnosable from the CI log. Tokens stay hidden.
+	fmt.Printf("debug codes   -> HTTP %d body %s\n", status, body)
 
 	// 6. Pair a parent install with that code (the code is the credential).
 	status, body, err = post("/api/pair", map[string]string{
@@ -194,6 +197,7 @@ func main() {
 	if err == nil && (status != http.StatusOK || pair["student_id"] != smokeStudent || len(token) != 64) {
 		step("pair", fmt.Errorf("HTTP %d body %s", status, body))
 	}
+	fmt.Printf("debug pair    -> HTTP %d body %s\n", status, body)
 
 	// 7. The events feed must deliver the synced row to the paired token.
 	status, body, err = get("/api/events?since=0", map[string]string{
