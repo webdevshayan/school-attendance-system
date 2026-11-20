@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -28,13 +29,17 @@ type fakeTurso struct {
 
 // stmtResult is the canned outcome for one execute statement.
 type stmtResult struct {
-	affected int64  // used when errMsg == ""
-	rows     int    // used when errMsg == "" && affected < 0 (SELECT shape)
-	errMsg   string // non-empty → error result
+	affected int64      // used when errMsg == "" && textRows == nil
+	rows     int        // used when errMsg == "" && affected < 0 (SELECT of 1s)
+	textRows [][]string // SELECT with literal text rows: each inner slice = one row's cell values
+	errMsg   string     // non-empty → error result
 }
 
 func affectedResult(n int64) stmtResult { return stmtResult{affected: n} }
 func rowsResult(n int) stmtResult       { return stmtResult{affected: -1, rows: n} }
+func textRowsResult(rows ...[]string) stmtResult {
+	return stmtResult{affected: -1, textRows: rows}
+}
 func errorResult(msg string) stmtResult { return stmtResult{errMsg: msg} }
 
 func (f *fakeTurso) handler() http.Handler {
@@ -67,8 +72,10 @@ func (f *fakeTurso) handler() http.Handler {
 					switch v := a.Value.(type) {
 					case string:
 						vals = append(vals, v)
+					case float64:
+						vals = append(vals, strconv.FormatFloat(v, 'f', -1, 64))
 					default:
-						f.t.Fatalf("unexpected arg type %T (%v) - text args must be JSON strings", a.Value, a.Value)
+						f.t.Fatalf("unexpected arg type %T (%v) - args must be JSON strings or numbers", a.Value, a.Value)
 					}
 				}
 				f.gotArgs = append(f.gotArgs, vals)
@@ -92,6 +99,22 @@ func (f *fakeTurso) handler() http.Handler {
 			case res.errMsg != "":
 				results = append(results,
 					`{"type":"error","error":{"message":`+jsonString(res.errMsg)+`}}`)
+			case res.textRows != nil:
+				rows := ""
+				for j, rowVals := range res.textRows {
+					cells := ""
+					for k, v := range rowVals {
+						if k > 0 {
+							cells += ","
+						}
+						cells += `{"type":"text","value":` + jsonString(v) + `}`
+					}
+					if j > 0 {
+						rows += ","
+					}
+					rows += `{"type":"row","row":[` + cells + `]}`
+				}
+				results = append(results, `{"type":"ok","response":{"result":{"type":"ok","cols":[],"rows":[`+rows+`],"affected_row_count":0}}}`)
 			case res.affected >= 0:
 				results = append(results, `{"type":"ok","response":{"result":{"type":"ok","cols":[],"rows":[],"affected_row_count":`+itoa(int(res.affected))+`}}}`)
 			default:
@@ -139,7 +162,7 @@ func newTestStore(t *testing.T, results ...stmtResult) (*TursoStore, *fakeTurso)
 }
 
 func TestInitCreatesSchemaIdempotently(t *testing.T) {
-	s, f := newTestStore(t, affectedResult(0), affectedResult(0))
+	s, f := newTestStore(t, affectedResult(0), affectedResult(0), affectedResult(0), affectedResult(0))
 	if err := s.Init(context.Background()); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
@@ -150,8 +173,8 @@ func TestInitCreatesSchemaIdempotently(t *testing.T) {
 	if f.calls != 1 {
 		t.Fatalf("pipeline calls = %d, want 1 (memoized)", f.calls)
 	}
-	if len(f.gotSQLs) != 2 {
-		t.Fatalf("statements = %d, want 2 (both tables)", len(f.gotSQLs))
+	if len(f.gotSQLs) != 4 {
+		t.Fatalf("statements = %d, want 4 (attendance, devices, codes, parents)", len(f.gotSQLs))
 	}
 	for _, sql := range f.gotSQLs {
 		if !strings.Contains(sql, "CREATE TABLE IF NOT EXISTS") {
