@@ -15,9 +15,9 @@ Face at door ──▶ /apps/admin (Flutter)
 
 | Component | Path | Status |
 | --- | --- | --- |
-| Admin App (Flutter, door-side capture) | `apps/admin` | Phase 2: camera + FaceNet recognition + libsql_dart queue; Phase 4: signed sync + device registration |
-| Parent App (Flutter, dashboard + push) | `apps/parent` | Phase 3: dashboard + local cache + push handling scaffold (fan-out seam ready) |
-| Serverless API (Go on Vercel) | `server` | **Live**: `/api/health`, signed `/api/sync` with Turso persistence + de-dup, `/api/register`, push fan-out seam |
+| Admin App (Flutter, door-side capture) | `apps/admin` | Phase 2: camera + FaceNet recognition + libsql_dart queue; Phase 4: signed sync + device registration; Phase 5: pairing-code minting on the Enroll page |
+| Parent App (Flutter, dashboard + push) | `apps/parent` | Phase 3: dashboard + local cache; Phase 5: pairing flow + live events feed into the push seam |
+| Serverless API (Go on Vercel) | `server` | **Live**: `/api/health`, signed `/api/sync` (Turso + de-dup), `/api/register`, `/api/codes`, `/api/pair`, `/api/events`, fan-out seam |
 | CI/CD | `.github/workflows` | Both pipelines live + Go test gate on PRs |
 
 ## Roadmap
@@ -25,8 +25,9 @@ Face at door ──▶ /apps/admin (Flutter)
 - **Phase 1 — Scaffold & pipelines (landed):** monorepo layout, Flutter boilerplate for both apps, Go API stub on Vercel, `build_apks.yml` + `deploy_server.yml`.
 - **Phase 2 — Admin core (landed):** camera preview, on-device recognition (`face_verification`, bundled FaceNet TFLite), offline attendance writes via `libsql_dart`, background sync to `/api/sync`.
 - **Phase 3 — Parent core (landed):** engaging dashboard (today status, event timeline, weekly summary), local SQLite cache (sqflite, de-duplicated), transport-agnostic push handling.
-- **Phase 4 — Backend integration (landed):** signed requests (HMAC-SHA256 headers + 5-minute replay window), device registration allowlist, Turso persistence with server-side de-dup, best-effort Nitroping push fan-out seam. Live channel activation = set the relay env vars; the parent app needs no change (`PushHandler` is the seam).
-- **Next — pairing & guardian routing:** parent install ↔ child pairing flow, guardian device-token registry on the server, live Nitroping relay credentials.
+- **Phase 4 — Backend integration (landed):** signed requests (HMAC-SHA256 headers + 5-minute replay window), device registration allowlist, Turso persistence with server-side de-dup, best-effort Nitroping push fan-out seam.
+- **Phase 5 — Pairing & delivery (landed):** door-minted pairing codes (7-day TTL, multi-use), guardian device registry (tokens stored as SHA-256 only), `GET /api/events` cursor feed with per-student isolation — parents see attendance live via polling; switching to Nitroping push later needs only relay credentials, the `PushHandler` seam stays.
+- **Next — live push & polish:** Nitroping relay credentials + parent-side push receiver (poller stays as fallback), guardian management UI (revoke/reissue codes), multi-school tenancy if needed.
 
 ## CI/CD & storage hygiene
 

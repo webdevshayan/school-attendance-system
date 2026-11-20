@@ -17,9 +17,11 @@ Degraded states are explicit: if the face engine, the local database or the came
 
 `Enroll` (FAB): name (+ optional id) -> camera snap -> face sample (`door_enrollment` slot, replace-on-recapture) + students row. Removing a student deletes both their local row and their face sample.
 
+Every enrolled student row also has a **pairing-code action** (Phase 5): it HMAC-signs `POST /api/codes` (same scheme as sync, so only registered door devices can mint codes) and shows the resulting 8-character code + expiry. The school hands that code to the guardians; both parents can pair from it until it expires (7 days). Unsigned local builds skip the network and show a retry hint instead.
+
 ## Configuration
 
-`lib/core/config.dart`: server base URL (placeholder until the Vercel project is linked — swap in the real production domain), device id (`door-1`), match threshold, cooldown, capture and sync intervals.
+`lib/core/config.dart`: server base URL (live domain: rgs-attendance-system.vercel.app), device id (`door-1`), HMAC signing secret (baked in via `--dart-define=SYNC_SIGNING_SECRET` from CI; empty on local builds = sync and code minting stay offline), match threshold, cooldown, capture and sync intervals.
 
 ## Build
 
