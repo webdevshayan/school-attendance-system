@@ -7,7 +7,7 @@ Serverless API deployed to Vercel. Phase 1 ships two zero-config Go functions un
 | `/api/health` | GET | Liveness probe |
 | `/api/sync` | POST | Receives attendance rows from the admin app (Phase 1: validate + ack) |
 
-Each `api/*.go` file uses `package main` and exports `Handler(w, r)`, and is served at its own path by Vercel's Go runtime (zero-config mode: each route is compiled standalone with the runtime's generated bootstrap) — stdlib only, no framework. **Do not add a `go.mod` to `server/`**: its presence switches the runtime into module mode, where the whole `api/` directory must be a single importable, non-`main` package (and per-file `Handler` exports would collide). `vercel.json` disables Vercel's own git deployments so the Actions pipeline (`deploy_server.yml`) is the single deploy path.
+The `api/*.go` files form **one `package handler`**, each exporting `Handler(w, r)`, served at its own path (`/api/health`, `/api/sync`) by Vercel's Go runtime in module mode: with a `go.mod` present, the runtime requires the `api/` directory to be a single importable, non-`main` package (its builder rewrites the `go.mod` module line to the package name and compiles the whole package with a generated bootstrap; the entrypoint's `Handler` is renamed per build, so the per-file same-name exports are fine). Stdlib only, no framework. `vercel.json` disables Vercel's own git deployments so the Actions pipeline (`deploy_server.yml`) is the single deploy path.
 
 ## Deploy
 
