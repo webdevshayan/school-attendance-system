@@ -43,7 +43,7 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Deploy server/ to Vercel (production)
+      - name: Deploy server/ to Vercel (production, remote build)
         working-directory: server
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -51,7 +51,8 @@ jobs:
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
           # VERCEL_TOKEN / VERCEL_ORG_ID / VERCEL_PROJECT_ID come from the env
-          # block above; the CLI picks them up without --token on the command line.
-          npx --yes vercel@latest pull --yes --environment=production
-          npx --yes vercel@latest build --prod
-          npx --yes vercel@latest deploy --prebuilt --prod
+          # block above; the CLI picks them up without --token on the command
+          # line. Remote build (no pull/build/--prebuilt): Vercel compiles the
+          # Go runtime on its own infra - the local prebuilt flow broke with
+          # ENOENT on the built bootstrap binary (CLI 66.x quirk).
+          npx --yes vercel@latest deploy --prod
