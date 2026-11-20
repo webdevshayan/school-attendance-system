@@ -270,6 +270,26 @@ class _AdminHomePageState extends State<AdminHomePage> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        if (!AdminConfig.isServerConfigured)
+          Card(
+            color: Colors.orange.shade50,
+            child: const Padding(
+              padding: EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Icon(Icons.cloud_off, size: 18),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Server URL not configured yet - attendance is saved '
+                      'offline and syncs once the real domain is set (Phase 4).',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         Card(
           child: Padding(
             padding: const EdgeInsets.all(12),

@@ -27,9 +27,11 @@ class SyncService {
   bool _draining = false;
 
   /// Tries to drain the queue; returns how many rows were acknowledged.
-  /// Returns 0 immediately when another drain is already in flight.
+  /// Returns 0 immediately when another drain is already in flight, or while
+  /// the server URL is still the documented placeholder (nothing to POST to).
   Future<int> syncPending() async {
     if (_draining) return 0;
+    if (baseUrl == AdminConfig.unconfiguredServerUrl) return 0;
     _draining = true;
     try {
       final rows = await _store.pendingSync();
