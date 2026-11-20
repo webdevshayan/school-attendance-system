@@ -1,0 +1,27 @@
+name: Diagnose Turso
+
+# Temporary incident diagnostic (PR #6 follow-up): connects to Turso with the
+# same credentials the deployed functions use and prints the real error.
+# Remove once the storage issue is resolved.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    name: Turso connectivity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Probe Turso
+        working-directory: server
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+        run: go run ./diag
