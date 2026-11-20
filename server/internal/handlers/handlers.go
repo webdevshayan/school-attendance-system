@@ -19,6 +19,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/webdevshayan/school-attendance-system/server/internal/authn"
@@ -31,6 +32,24 @@ import (
 // the handler. Real attendance rows are a few hundred bytes; 1 MB is generous.
 const maxBodyBytes = 1 << 20
 
+// The Turso store is a per-serverless-instance singleton: the schema Init is
+// memoized on it, so building a fresh store per request would re-run Init
+// (or, worse, miss it entirely). Env vars are constant per instance.
+var (
+	storeOnce   sync.Once
+	sharedStore store.Store
+)
+
+func depStore() store.Store {
+	storeOnce.Do(func() {
+		url, token := os.Getenv("TURSO_DATABASE_URL"), os.Getenv("TURSO_AUTH_TOKEN")
+		if url != "" && token != "" {
+			sharedStore = store.NewTurso(turso.New(url, token))
+		}
+	})
+	return sharedStore
+}
+
 // Deps is the full dependency set for the endpoint handlers. A nil Store or
 // Pusher means that integration is not configured; Sync/Register answer 503
 // (Store) or skip silently (Pusher) accordingly.
@@ -41,18 +60,12 @@ type Deps struct {
 }
 
 // DepsFromEnv assembles the dependency set from the process environment.
-// Handlers call it per request; env vars are constant per serverless
-// instance and the constructors are cheap structs.
 func DepsFromEnv() Deps {
-	var st store.Store
-	if url, token := os.Getenv("TURSO_DATABASE_URL"), os.Getenv("TURSO_AUTH_TOKEN"); url != "" && token != "" {
-		st = store.NewTurso(turso.New(url, token))
-	}
 	var p fanout.Pusher
 	if hook := os.Getenv("NITROPING_WEBHOOK_URL"); hook != "" {
 		p = fanout.NewWebhook(hook, os.Getenv("NITROPING_API_KEY"))
 	}
-	return Deps{Secret: os.Getenv("SYNC_SIGNING_SECRET"), Store: st, Pusher: p}
+	return Deps{Secret: os.Getenv("SYNC_SIGNING_SECRET"), Store: depStore(), Pusher: p}
 }
 
 func writeJSON(w http.ResponseWriter, code int, payload map[string]any) {
@@ -100,6 +113,11 @@ func Sync(d Deps, w http.ResponseWriter, r *http.Request) {
 	if !requireConfig(d, w) {
 		return
 	}
+	// Schema bootstrap (idempotent; memoized on the store singleton).
+	if err := d.Store.Init(r.Context()); err != nil {
+		storageDown(w, err)
+		return
+	}
 	body := readBody(w, r)
 	if body == nil {
 		return
@@ -121,11 +139,11 @@ func Sync(d Deps, w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": `status must be "in" or "out"`})
 		return
 	}
-	if req.MarkedAt != "" {
-		if _, err := time.Parse(time.RFC3339, req.MarkedAt); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "marked_at must be RFC3339"})
-			return
-		}
+	// Required since Phase 4: the server-side de-dup key and the parent
+	// fan-out payload both depend on a real timestamp.
+	if _, err := time.Parse(time.RFC3339, req.MarkedAt); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "marked_at is required and must be RFC3339"})
+		return
 	}
 	deviceID := r.Header.Get(authn.DeviceHeader)
 	if req.DeviceID != "" && req.DeviceID != deviceID {
@@ -197,6 +215,11 @@ func Register(d Deps, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !requireConfig(d, w) {
+		return
+	}
+	// Schema bootstrap (idempotent; memoized on the store singleton).
+	if err := d.Store.Init(r.Context()); err != nil {
+		storageDown(w, err)
 		return
 	}
 	body := readBody(w, r)

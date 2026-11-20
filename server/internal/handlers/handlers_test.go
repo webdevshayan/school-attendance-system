@@ -23,13 +23,14 @@ type fakeStore struct {
 	seen      map[string]bool
 	existsErr error
 	insertErr error
+	initErr   error
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{devices: map[string]string{}, seen: map[string]bool{}}
 }
 
-func (f *fakeStore) Init(_ context.Context) error { return nil }
+func (f *fakeStore) Init(_ context.Context) error { return f.initErr }
 
 func (f *fakeStore) InsertRow(_ context.Context, r store.Row) (bool, error) {
 	if f.insertErr != nil {
@@ -132,7 +133,7 @@ func TestRegisterThenSyncPersistsAndPushes(t *testing.T) {
 
 func TestSyncRejectsUnregisteredDevice(t *testing.T) {
 	d := fullDeps(newFakeStore(), &fakePusher{})
-	w, r := signed(t, "/api/sync", "door-x", `{"student_id":"s1","status":"in"}`, testSecret)
+	w, r := signed(t, "/api/sync", "door-x", `{"student_id":"s1","status":"in","marked_at":"2026-11-20T08:00:00Z"}`, testSecret)
 	Sync(d, w, r)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("sync = %d, want 403", w.Code)
@@ -201,6 +202,7 @@ func TestSyncValidatesBody(t *testing.T) {
 		{"missing student", `{"status":"in"}`, http.StatusBadRequest},
 		{"missing status", `{"student_id":"s1"}`, http.StatusBadRequest},
 		{"bad status", `{"student_id":"s1","status":"late"}`, http.StatusBadRequest},
+		{"missing marked_at", `{"student_id":"s1","status":"in"}`, http.StatusBadRequest},
 		{"bad marked_at", `{"student_id":"s1","status":"in","marked_at":"tuesday"}`, http.StatusBadRequest},
 		{"device mismatch", `{"device_id":"door-9","student_id":"s1","status":"in"}`, http.StatusBadRequest},
 		{"not json", `nope`, http.StatusBadRequest},
@@ -267,10 +269,25 @@ func TestSyncStorageFailureIs502(t *testing.T) {
 	d := fullDeps(st, &fakePusher{})
 	_ = st.UpsertDevice(context.Background(), store.Device{DeviceID: "door-1"})
 
-	w, r := signed(t, "/api/sync", "door-1", `{"student_id":"s1","status":"in"}`, testSecret)
+	w, r := signed(t, "/api/sync", "door-1", `{"student_id":"s1","status":"in","marked_at":"2026-11-20T08:00:00Z"}`, testSecret)
 	Sync(d, w, r)
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("sync = %d, want 502", w.Code)
+	}
+}
+
+// F1 from the review: schema bootstrap failures must surface as 502 (retry
+// later), never as a silent skip.
+func TestSyncSchemaInitFailureIs502(t *testing.T) {
+	st := newFakeStore()
+	st.initErr = fmt.Errorf("no such table")
+	d := fullDeps(st, &fakePusher{})
+	_ = st.UpsertDevice(context.Background(), store.Device{DeviceID: "door-1"})
+
+	w, r := signed(t, "/api/sync", "door-1", `{"student_id":"s1","status":"in","marked_at":"2026-11-20T08:00:00Z"}`, testSecret)
+	Sync(d, w, r)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("sync = %d, want 502 on init failure", w.Code)
 	}
 }
 
