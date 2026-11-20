@@ -21,7 +21,7 @@ func TestExecuteSendsTypedStatementsAndReturnsAffectedCounts(t *testing.T) {
 		w.WriteHeader(gotStatus)
 		_, _ = w.Write([]byte(`{"results":[
 			{"type":"ok","response":{"result":{"type":"ok","cols":[],"rows":[],"affected_row_count":1}}},
-			{"type":"ok","response":{"result":{"type":"ok","cols":[],"rows":[],"affected_row_count":0}}},
+			{"type":"ok","response":{"result":{"type":"ok","cols":[{"name":"1"}],"rows":[{"type":"row","row":[{"type":"integer","value":"1"}]}],"affected_row_count":0}}},
 			{"type":"ok","response":{"result":"close"}}
 		]}`))
 	}))
@@ -30,13 +30,20 @@ func TestExecuteSendsTypedStatementsAndReturnsAffectedCounts(t *testing.T) {
 	c := New(srv.URL, "db-token")
 	got, err := c.Execute(context.Background(),
 		Statement{SQL: "INSERT INTO t (a, b) VALUES (?, ?)", Args: []Arg{Text("abc"), Integer(42)}},
-		Statement{SQL: "UPDATE t SET a = ?", Args: []Arg{Text("dup")}},
+		Statement{SQL: "SELECT 1 FROM t WHERE a = ?", Args: []Arg{Text("abc")}},
 	)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if len(got) != 2 || got[0] != 1 || got[1] != 0 {
-		t.Fatalf("affected counts = %v, want [1 0]", got)
+	if len(got) != 2 {
+		t.Fatalf("results = %v, want 2", got)
+	}
+	if got[0].AffectedRowCount != 1 {
+		t.Errorf("insert affected = %d, want 1", got[0].AffectedRowCount)
+	}
+	// The SELECT reports zero affected rows but one returned row.
+	if got[1].AffectedRowCount != 0 || got[1].RowCount != 1 {
+		t.Errorf("select = %+v, want affected 0 rows 1", got[1])
 	}
 	if gotPath != "/v2/pipeline" {
 		t.Errorf("path = %q, want /v2/pipeline", gotPath)
