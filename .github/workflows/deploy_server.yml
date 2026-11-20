@@ -36,7 +36,7 @@ jobs:
       - name: gofmt (fail on unformatted files)
         working-directory: server
         run: |
-          unformatted=$(gofmt -l api internal)
+          unformatted=$(gofmt -l api pkg)
           if [ -n "$unformatted" ]; then
             echo "::error::Unformatted Go files: $unformatted"
             exit 1
@@ -46,7 +46,7 @@ jobs:
         run: go vet ./...
       - name: go test
         working-directory: server
-        run: go test ./internal/... -count=1
+        run: go test ./pkg/... -count=1
 
   deploy:
     name: Vercel production deploy

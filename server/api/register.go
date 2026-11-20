@@ -5,7 +5,7 @@ package handler
 import (
 	"net/http"
 
-	"github.com/webdevshayan/school-attendance-system/server/internal/handlers"
+	"github.com/webdevshayan/school-attendance-system/server/pkg/handlers"
 )
 
 // Register adds a signed device to the server's sync allowlist.

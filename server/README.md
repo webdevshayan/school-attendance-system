@@ -36,7 +36,7 @@ X-Sync-Signature: <hex HMAC-SHA256(secret, deviceId \n timestamp \n body)>
 
 ## Layout & the Vercel Go runtime contract
 
-All logic lives in `internal/` (authn, turso, store, fanout, handlers) — `go test ./internal/...` covers it in CI. The `api/*.go` files are thin adapters forming **one `package handler`**, each exporting a **distinctly named** function with the standard signature (`Health`, `Sync`, `Register`). In module mode (a `go.mod` present) the runtime compiles the whole package per route, rewrites the `go.mod` module line to the package name, and renames the entrypoint's handler (found by *signature*, any exported name) during that route's build — so per-file exports must stay distinct and `internal/handlers` calls must stay qualified. Stdlib only, no framework; Turso is reached over its HTTP pipeline API (`internal/turso`) because the official SDK needs a native libsql core this runtime can't run.
+All logic lives in `pkg/` (authn, turso, store, fanout, handlers) — `go test ./pkg/...` covers it in CI. The `api/*.go` files are thin adapters forming **one `package handler`**, each exporting a **distinctly named** function with the standard signature (`Health`, `Sync`, `Register`). In module mode (a `go.mod` present) the runtime compiles the whole package per route, rewrites the `go.mod` module line to the package name, and renames the entrypoint's handler (found by *signature*, any exported name) during that route's build — so per-file exports must stay distinct and `pkg/handlers` calls must stay qualified. Stdlib only, no framework; Turso is reached over its HTTP pipeline API (`pkg/turso`) because the official SDK needs a native libsql core this runtime can't run.
 
 **Framework Preset on Vercel must stay "Other"** — a Golang app preset makes the platform look for `main.go` and fail with "No Go entrypoint found". `deploy_server.yml` self-heals this setting before every deploy.
 
@@ -44,8 +44,8 @@ All logic lives in `internal/` (authn, turso, store, fanout, handlers) — `go t
 
 ## Deploy
 
-Automatic via `.github/workflows/deploy_server.yml` on merges to `main` (PRs run the Go test gate first: gofmt + vet + `go test ./internal/...`). Requires the repo secrets `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`; the workflow fails loudly with instructions if any are missing.
+Automatic via `.github/workflows/deploy_server.yml` on merges to `main` (PRs run the Go test gate first: gofmt + vet + `go test ./pkg/...`). Requires the repo secrets `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`; the workflow fails loudly with instructions if any are missing.
 
 ## Next: parent fan-out channel
 
-`internal/fanout` posts events (wire shape identical to `/api/sync`) to the Nitroping relay when `NITROPING_WEBHOOK_URL` is set; the parent app's `PushHandler` is already the receiving seam, so wiring the live channel needs no app change — only relay credentials and (if routing by child) a guardian mapping.
+`pkg/fanout` posts events (wire shape identical to `/api/sync`) to the Nitroping relay when `NITROPING_WEBHOOK_URL` is set; the parent app's `PushHandler` is already the receiving seam, so wiring the live channel needs no app change — only relay credentials and (if routing by child) a guardian mapping.

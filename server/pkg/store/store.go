@@ -13,7 +13,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/webdevshayan/school-attendance-system/server/internal/turso"
+	"github.com/webdevshayan/school-attendance-system/server/pkg/turso"
 )
 
 // Row is one attendance mark as received from an admin device.

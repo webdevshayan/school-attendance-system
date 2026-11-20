@@ -22,10 +22,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/webdevshayan/school-attendance-system/server/internal/authn"
-	"github.com/webdevshayan/school-attendance-system/server/internal/fanout"
-	"github.com/webdevshayan/school-attendance-system/server/internal/store"
-	"github.com/webdevshayan/school-attendance-system/server/internal/turso"
+	"github.com/webdevshayan/school-attendance-system/server/pkg/authn"
+	"github.com/webdevshayan/school-attendance-system/server/pkg/fanout"
+	"github.com/webdevshayan/school-attendance-system/server/pkg/store"
+	"github.com/webdevshayan/school-attendance-system/server/pkg/turso"
 )
 
 // maxBodyBytes caps the request body so a misbehaving device can't blow up

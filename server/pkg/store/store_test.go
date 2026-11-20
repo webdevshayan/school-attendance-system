@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/webdevshayan/school-attendance-system/server/internal/turso"
+	"github.com/webdevshayan/school-attendance-system/server/pkg/turso"
 )
 
 // fakeTurso is a scriptable /v2/pipeline server: it records the statements it

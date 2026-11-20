@@ -5,7 +5,7 @@ package handler
 import (
 	"net/http"
 
-	"github.com/webdevshayan/school-attendance-system/server/internal/handlers"
+	"github.com/webdevshayan/school-attendance-system/server/pkg/handlers"
 )
 
 // Sync accepts one attendance row from a signed, registered admin device.

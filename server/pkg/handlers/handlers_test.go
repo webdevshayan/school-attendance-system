@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/webdevshayan/school-attendance-system/server/internal/authn"
-	"github.com/webdevshayan/school-attendance-system/server/internal/fanout"
-	"github.com/webdevshayan/school-attendance-system/server/internal/store"
+	"github.com/webdevshayan/school-attendance-system/server/pkg/authn"
+	"github.com/webdevshayan/school-attendance-system/server/pkg/fanout"
+	"github.com/webdevshayan/school-attendance-system/server/pkg/store"
 )
 
 // fakeStore implements store.Store in memory; InsertRow de-duplicates on the

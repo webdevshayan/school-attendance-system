@@ -5,7 +5,7 @@ package handler
 import (
 	"net/http"
 
-	"github.com/webdevshayan/school-attendance-system/server/internal/handlers"
+	"github.com/webdevshayan/school-attendance-system/server/pkg/handlers"
 )
 
 // Health reports liveness plus which integrations are configured.
