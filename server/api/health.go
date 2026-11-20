@@ -1,16 +1,15 @@
+// Thin adapter for Vercel's Go runtime (module mode): all logic lives in
+// internal/handlers so it is testable without a deployment.
 package handler
 
 import (
-	"encoding/json"
 	"net/http"
+
+	"github.com/webdevshayan/school-attendance-system/server/internal/handlers"
 )
 
-// Handler reports liveness for monitoring and the admin app's sync probe.
-// Served at GET /api/health by Vercel's zero-config Go runtime.
-func Handler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"status":  "ok",
-		"service": "school-attendance-server",
-	})
+// Health reports liveness plus which integrations are configured.
+// Served at GET /api/health by Vercel's Go runtime.
+func Health(w http.ResponseWriter, r *http.Request) {
+	handlers.Health(handlers.DepsFromEnv(), w, r)
 }
