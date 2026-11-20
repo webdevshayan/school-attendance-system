@@ -116,6 +116,36 @@ func TestExecutePropagatesHTTPFailure(t *testing.T) {
 	}
 }
 
+// TestExecuteParsesV2ArrayRows pins the shape the REAL v2 pipeline returns
+// (rows as plain arrays of JSON values). The live incident 2026-11-20 was
+// this shape being silently unparseable: every SELECT looked empty, so
+// FindCode "did not find" a code minted a second earlier.
+func TestExecuteParsesV2ArrayRows(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"results":[{"type":"ok","response":{"result":{"type":"ok","cols":[{"name":"id"},{"name":"a"}],"rows":[[11,"door-1"],[12.5,"x"],[null,"y"]],"affected_row_count":0}}}]}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "t")
+	got, err := c.Execute(context.Background(), Statement{SQL: "SELECT id, a FROM t"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	rows := got[0].Rows
+	if got[0].RowCount != 3 || len(rows) != 3 {
+		t.Fatalf("rows = %d (count %d), want 3", len(rows), got[0].RowCount)
+	}
+	if rows[0][0].Int() != 11 || rows[0][1].Str() != "door-1" {
+		t.Errorf("row0 = %+v", rows[0])
+	}
+	if rows[1][0].Str() != "12.5" || rows[1][0].Int() != 0 {
+		t.Errorf("row1 (non-integral number) = %+v; Int() is 0 by contract", rows[1][0])
+	}
+	if rows[2][0].Type != "null" || rows[2][0].Str() != "" {
+		t.Errorf("row2 (null) = %+v", rows[2][0])
+	}
+}
+
 func TestExecuteNoStatements(t *testing.T) {
 	c := New("http://unused.invalid", "t")
 	got, err := c.Execute(context.Background())

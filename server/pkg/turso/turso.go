@@ -86,6 +86,25 @@ func (c Cell) Int() int64 {
 	return n
 }
 
+// cellFromValue coerces one plain JSON value from the v2 pipeline row shape
+// into a Cell. libSQL reports integers as JSON numbers, so they are formatted
+// losslessly; nulls carry an empty value.
+func cellFromValue(v any) Cell {
+	switch x := v.(type) {
+	case string:
+		return Cell{Type: "text", Value: x}
+	case float64:
+		return Cell{Type: "integer", Value: strconv.FormatFloat(x, 'f', -1, 64)}
+	case bool:
+		if x {
+			return Cell{Type: "integer", Value: "1"}
+		}
+		return Cell{Type: "integer", Value: "0"}
+	default:
+		return Cell{Type: "null", Value: ""}
+	}
+}
+
 // Result summarizes one executed statement. SELECTs surface their rows.
 type Result struct {
 	AffectedRowCount int64    // DML statements (INSERT/UPDATE/DELETE)
@@ -172,15 +191,33 @@ func (c *Client) Execute(ctx context.Context, stmts ...Statement) ([]Result, err
 			// means the server answered out of order.
 			return nil, fmt.Errorf("turso: statement %d: unexpected result shape", i)
 		}
-		// Row objects: {"type":"row","row":[{"type":"text","value":"x"},…]}.
-		// Absent/null rows field (DML) → nil.
+		// The v2 pipeline API returns SELECT rows as plain JSON arrays of
+		// values: [[11,"door-1"],…]. Older/Hrana-style payloads wrap them as
+		// {"type":"row","row":[{type,value},…]} - accept both shapes, and do
+		// NOT silence the decode error: a silently-missp parsed shape made
+		// every real SELECT look empty (live incident 2026-11-20: mint
+		// succeeded but FindCode "did not find" the row it just inserted).
+		var rows [][]Cell
 		var rowObjs []struct {
 			Row []Cell `json:"row"`
 		}
-		_ = json.Unmarshal(exec.Rows, &rowObjs)
-		rows := make([][]Cell, 0, len(rowObjs))
-		for _, obj := range rowObjs {
-			rows = append(rows, obj.Row)
+		if err := json.Unmarshal(exec.Rows, &rowObjs); err == nil && len(rowObjs) > 0 {
+			rows = make([][]Cell, 0, len(rowObjs))
+			for _, obj := range rowObjs {
+				rows = append(rows, obj.Row)
+			}
+		} else {
+			var rawRows [][]any
+			if err := json.Unmarshal(exec.Rows, &rawRows); err == nil && len(rawRows) > 0 {
+				rows = make([][]Cell, 0, len(rawRows))
+				for _, r := range rawRows {
+					row := make([]Cell, 0, len(r))
+					for _, v := range r {
+						row = append(row, cellFromValue(v))
+					}
+					rows = append(rows, row)
+				}
+			}
 		}
 		affected = append(affected, Result{
 			AffectedRowCount: exec.AffectedRowCount,
