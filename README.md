@@ -25,7 +25,7 @@ Face at door ──▶ /apps/admin (Flutter)
 - **Phase 1 — Scaffold & pipelines (this PR):** monorepo layout, Flutter boilerplate for both apps, Go API stub on Vercel, `build_apks.yml` + `deploy_server.yml`.
 - **Phase 2 — Admin core:** camera preview, on-device recognition (`face_verification`, TFLite), offline attendance writes via `libsql_dart`, background sync.
 - **Phase 3 — Parent core:** engaging visual dashboard, Nitroping push handling.
-- **Phase 4 — Backend integration:** Turso persistence in `/api/sync`, push fan-out, device registration.
+- **Phase 4 — Backend integration:** Turso persistence in `/api/sync` with device registration + signed requests (the endpoint must not persist unauthenticated writes), push fan-out.
 
 ## CI/CD & storage hygiene
 

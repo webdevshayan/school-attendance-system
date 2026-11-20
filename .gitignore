@@ -7,6 +7,9 @@
 *.jks
 keystore/
 secrets*
+serviceAccount*.json
+*.keystore
+*.mobileprovision
 
 # ── dart / flutter ─────────────────────────────────────
 .dart_tool/
