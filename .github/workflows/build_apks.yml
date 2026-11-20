@@ -78,42 +78,27 @@ jobs:
               print('gradle.properties: jvm target validation -> warning')
           root = 'android/build.gradle.kts'
           r = open(root).read()
-          if 'com.android.build.api.dsl.Lint' not in r:
+          if 'lint tasks disabled repo-wide' not in r:
               # AGP lint crashes (JavaDocParser NoSuchMethodError) while
-              # running lintVital over plugin sources (camera_android_camerax).
-              # Release lint is not part of the Phase 2 gate - dart analyze,
-              # unit tests and gradle compilation are - so disable it in every
-              # module from the root build file.
-              lines = r.split('\n')
-              for i, ln in enumerate(lines):
-                  if ln.strip() and not ln.strip().startswith('//'):
-                      lines.insert(i, 'import com.android.build.api.dsl.Lint')
-                      break
-              r = '\n'.join(lines) + '''
+              # running lintVital over flutter plugin sources
+              # (camera_android_camerax). The Phase 2 quality gate is dart
+              # analyze + unit tests + gradle compilation, so disable the lint
+              # tasks at task level (DSL-level lint{} does not reliably reach
+              # flutter plugin library modules).
+              r = r + '''
 
-          // Release lint disabled repo-wide: AGP lint crashes while analyzing
-          // plugin sources. Revisit when the plugin ecosystem catches up with
-          // the current AGP lint.
-          // NOTE: pluginManager.withPlugin (not afterEvaluate) - the template
-          // evaluates :app during root evaluation, so afterEvaluate would
-          // throw "project is already evaluated".
-          subprojects {
-              pluginManager.withPlugin("com.android.application") {
-                  extensions.findByType(Lint::class.java)?.apply {
-                      checkReleaseBuilds = false
-                      abortOnError = false
-                  }
-              }
-              pluginManager.withPlugin("com.android.library") {
-                  extensions.findByType(Lint::class.java)?.apply {
-                      checkReleaseBuilds = false
-                      abortOnError = false
+          // Lint tasks disabled repo-wide: AGP lint crashes while analyzing
+          // flutter plugin sources. See the workflow scaffold-patch comment.
+          gradle.projectsEvaluated {
+              subprojects {
+                  tasks.matching { it.name.startsWith("lint") }.configureEach {
+                      enabled = false
                   }
               }
           }
           '''
               open(root, 'w').write(r)
-              print('build.gradle.kts: release lint disabled for all modules')
+              print('build.gradle.kts: lint tasks disabled for all modules')
           PY
 
       - name: Resolve dependencies
