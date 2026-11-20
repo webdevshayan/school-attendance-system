@@ -185,14 +185,17 @@ class _AdminHomePageState extends State<AdminHomePage> {
   Future<void> _refreshStats() async {
     final store = _store;
     if (store == null) return;
-    final students = await store.allStudents();
-    final today = await store.attendanceForDay(DateTime.now().toUtc());
-    final pending = await store.pendingSyncCount();
+    // Run the three reads concurrently - each hits the local database.
+    final results = await Future.wait(<Future<Object?>>[
+      store.allStudents(),
+      store.attendanceForDay(DateTime.now().toUtc()),
+      store.pendingSyncCount(),
+    ]);
     if (!mounted) return;
     setState(() {
-      _students = students;
-      _today = today;
-      _pendingSync = pending;
+      _students = results[0]! as List<Student>;
+      _today = results[1]! as List<AttendanceRecord>;
+      _pendingSync = results[2]! as int;
     });
   }
 
