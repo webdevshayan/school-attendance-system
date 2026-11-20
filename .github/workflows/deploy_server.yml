@@ -78,14 +78,16 @@ jobs:
         with:
           node-version: "20"
 
-      # The project uses the "Go" framework preset (slug "go"): its detector
-      # matches go.mod + main.go and it builds index.go with @vercel/go - one
-      # catch-all serverless function whose Handler dispatches every /api/*
-      # route. History: before index.go existed the preset failed with
-      # "No Go entrypoint found", so the workflow used to force "Other";
-      # the deploy step below still falls back to that automatically if the
-      # Go-preset build ever fails. The token is used in-place, never printed.
-      - name: Ensure framework preset is Go (self-heal)
+      # INCIDENT 2026-11-20 (PR #6): the "Go" framework preset (slug "go")
+      # BUILDS index.go successfully with @vercel/go, but the resulting
+      # catch-all function fails at invocation (FUNCTION_INVOCATION_FAILED on
+      # every route) for this root-package layout, taking production down.
+      # Until that is root-caused (needs the function's runtime logs), the
+      # preset stays "Other": the per-file api/*.go module mode that has been
+      # serving production since Phase 2. index.go/main.go/cmd/server stay in
+      # the tree for the retry. The deploy step verifies health after every
+      # deploy so a runtime-broken build can never silently go live again.
+      - name: Ensure framework preset is Other (self-heal, post-incident)
         working-directory: server
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -96,7 +98,7 @@ jobs:
             curl -sS -o /tmp/vercel_project.json -w '%{http_code}' -X PATCH \
               -H "Authorization: Bearer $VERCEL_TOKEN" \
               -H "Content-Type: application/json" \
-              "$1" -d '{"framework": "go"}'
+              "$1" -d '{"framework": null}'
           }
           code=$(patch_project "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID?teamId=$VERCEL_ORG_ID")
           if [ "$code" != 200 ]; then
@@ -150,10 +152,9 @@ jobs:
           exit $missing
 
       # Remote build (no pull/build/--prebuilt): Vercel compiles the Go
-      # runtime on its own infra. If the Go-preset build ever fails (the
-      # Phase 2 regression), fall back to the per-file api/ shape under the
-      # "Other" preset and retry once - production never serves a broken
-      # deploy, so this only ever widens compatibility.
+      # runtime on its own infra. After the swap, verify the deployment is
+      # actually SERVABLE (PR #6 lesson: a build can succeed and still crash
+      # at invocation - health verification is what catches that).
       - name: Deploy server/ to Vercel (production, remote build)
         working-directory: server
         env:
@@ -161,26 +162,16 @@ jobs:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
-          set +e
-          npx --yes vercel@latest deploy --prod
-          rc=$?
-          if [ $rc -ne 0 ]; then
-            echo "::warning::Deploy with the Go framework preset failed (rc=$rc) - patching preset to Other (api/*.go module mode) and retrying once"
-            patch_project() {
-              curl -sS -o /dev/null -w '%{http_code}' -X PATCH \
-                -H "Authorization: Bearer $VERCEL_TOKEN" \
-                -H "Content-Type: application/json" \
-                "$1" -d '{"framework": null}'
-            }
-            code=$(patch_project "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID?teamId=$VERCEL_ORG_ID")
-            if [ "$code" != 200 ]; then
-              patch_project "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID" >/dev/null
+          npx --yes vercel@latest deploy --prod || { echo "::error::Vercel deploy failed"; exit 1; }
+          echo "Deploy accepted. Verifying production health..."
+          for attempt in 1 2 3 4 5 6; do
+            code=$(curl -sS --max-time 15 -o /tmp/health.json -w '%{http_code}' "https://rgs-attendance-system.vercel.app/api/health" || echo 000)
+            if [ "$code" = "200" ] && grep -q '"status":"ok"' /tmp/health.json 2>/dev/null; then
+              echo "Production healthy (attempt $attempt): $(cat /tmp/health.json)"
+              exit 0
             fi
-            if ! npx --yes vercel@latest deploy --prod; then
-              echo "::error::Deploy failed with both the Go preset and the Other fallback"
-              exit 1
-            fi
-            echo "Deployed with the Other fallback (api/*.go). Investigate the Go-preset build log above."
-          else
-            echo "Deployed with the Go framework preset (index.go catch-all function)."
-          fi
+            echo "health check $attempt -> HTTP $code $(cat /tmp/health.json 2>/dev/null); retrying in 15 s"
+            sleep 15
+          done
+          echo "::error::Production is not healthy after the deploy - see the function logs in the Vercel dashboard"
+          exit 1
