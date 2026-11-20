@@ -194,31 +194,34 @@ func (c *Client) Execute(ctx context.Context, stmts ...Statement) ([]Result, err
 			// means the server answered out of order.
 			return nil, fmt.Errorf("turso: statement %d: unexpected result shape", i)
 		}
-		// The v2 pipeline API returns SELECT rows as plain JSON arrays of
-		// values: [[11,"door-1"],…]. Older/Hrana-style payloads wrap them as
-		// {"type":"row","row":[{type,value},…]} - accept both shapes, and do
-		// NOT silence the decode error: a silently-missp parsed shape made
-		// every real SELECT look empty (live incident 2026-11-20: mint
-		// succeeded but FindCode "did not find" the row it just inserted).
+		// Row shapes, most-specific first (RAW evidence from the live API,
+		// 2026-11-20): the v2 pipeline returns rows as arrays of TYPED CELL
+		// OBJECTS with no row wrapper - "rows":[[{"type":"text","value":…},…],…].
+		// The wrapped [{"type":"row","row":[…]}] and plain-value [[1,"a"]]
+		// shapes are accepted defensively for other libSQL deployments. A
+		// silently-ignored decode error here made every real SELECT look
+		// empty (mint OK, FindCode "unknown code") - the live incident.
 		var rows [][]Cell
-		var rowObjs []struct {
-			Row []Cell `json:"row"`
-		}
-		if err := json.Unmarshal(exec.Rows, &rowObjs); err == nil && len(rowObjs) > 0 {
-			rows = make([][]Cell, 0, len(rowObjs))
-			for _, obj := range rowObjs {
-				rows = append(rows, obj.Row)
+		if err := json.Unmarshal(exec.Rows, &rows); err != nil || len(rows) == 0 {
+			var rowObjs []struct {
+				Row []Cell `json:"row"`
 			}
-		} else {
-			var rawRows [][]any
-			if err := json.Unmarshal(exec.Rows, &rawRows); err == nil && len(rawRows) > 0 {
-				rows = make([][]Cell, 0, len(rawRows))
-				for _, r := range rawRows {
-					row := make([]Cell, 0, len(r))
-					for _, v := range r {
-						row = append(row, cellFromValue(v))
+			if err := json.Unmarshal(exec.Rows, &rowObjs); err == nil && len(rowObjs) > 0 {
+				rows = make([][]Cell, 0, len(rowObjs))
+				for _, obj := range rowObjs {
+					rows = append(rows, obj.Row)
+				}
+			} else {
+				var rawRows [][]any
+				if err := json.Unmarshal(exec.Rows, &rawRows); err == nil && len(rawRows) > 0 {
+					rows = make([][]Cell, 0, len(rawRows))
+					for _, r := range rawRows {
+						row := make([]Cell, 0, len(r))
+						for _, v := range r {
+							row = append(row, cellFromValue(v))
+						}
+						rows = append(rows, row)
 					}
-					rows = append(rows, row)
 				}
 			}
 		}

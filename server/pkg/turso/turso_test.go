@@ -21,7 +21,7 @@ func TestExecuteSendsTypedStatementsAndReturnsAffectedCounts(t *testing.T) {
 		w.WriteHeader(gotStatus)
 		_, _ = w.Write([]byte(`{"results":[
 			{"type":"ok","response":{"result":{"type":"ok","cols":[],"rows":[],"affected_row_count":1}}},
-			{"type":"ok","response":{"result":{"type":"ok","cols":[{"name":"id"},{"name":"a"}],"rows":[{"type":"row","row":[{"type":"integer","value":"7"},{"type":"text","value":"abc"}]},{"type":"row","row":[{"type":"integer","value":"9"},{"type":"text","value":"xyz"}]}],"affected_row_count":0}}},
+			{"type":"ok","response":{"result":{"type":"ok","cols":[{"name":"id"},{"name":"a"}],"rows":[[{"type":"integer","value":"7"},{"type":"text","value":"abc"}],[{"type":"integer","value":"9"},{"type":"text","value":"xyz"}]],"affected_row_count":0}}},
 			{"type":"ok","response":{"result":"close"}}
 		]}`))
 	}))
@@ -116,11 +116,10 @@ func TestExecutePropagatesHTTPFailure(t *testing.T) {
 	}
 }
 
-// TestExecuteParsesV2ArrayRows pins the shape the REAL v2 pipeline returns
-// (rows as plain arrays of JSON values). The live incident 2026-11-20 was
-// this shape being silently unparseable: every SELECT looked empty, so
-// FindCode "did not find" a code minted a second earlier.
-func TestExecuteParsesV2ArrayRows(t *testing.T) {
+// TestExecuteParsesPlainValueRows covers the plain-value array shape
+// ([[11,"door-1"],…]) defensively - other libSQL deployments/versions may
+// answer it; the live API uses typed cell objects (pinned by the first test).
+func TestExecuteParsesPlainValueRows(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"results":[{"type":"ok","response":{"result":{"type":"ok","cols":[{"name":"id"},{"name":"a"}],"rows":[[11,"door-1"],[12.5,"x"],[null,"y"]],"affected_row_count":0}}}]}`))
 	}))
