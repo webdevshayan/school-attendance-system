@@ -248,7 +248,7 @@ class _EnrollPageState extends State<EnrollPage> {
                 children: [
                   IconButton(
                     tooltip: 'Pairing code for the guardians',
-                    icon: const Icon(Icons.key_outline),
+                    icon: const Icon(Icons.key),
                     onPressed: () => unawaited(_showPairingCode(student)),
                   ),
                   IconButton(
