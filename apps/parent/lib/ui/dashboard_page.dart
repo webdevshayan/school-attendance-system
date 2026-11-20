@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 
 import '../core/config.dart';
@@ -192,12 +193,14 @@ class _DashboardPageState extends State<DashboardPage> {
               'appear here the moment they arrive.',
             ),
           ),
-        const SizedBox(height: 12),
-        TextButton.icon(
-          icon: const Icon(Icons.bug_report),
-          label: const Text('Simulate a push (debug)'),
-          onPressed: _simulatePush,
-        ),
+        // Debug-only: feeds a sample payload through the real pipeline so
+        // the dashboard is exercisable before the live push channel exists.
+        if (kDebugMode)
+          TextButton.icon(
+            icon: const Icon(Icons.bug_report),
+            label: const Text('Simulate a push (debug)'),
+            onPressed: _simulatePush,
+          ),
       ],
     );
   }
