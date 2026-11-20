@@ -89,4 +89,33 @@ void main() {
     expect(pushed, 0);
     expect(await store.pendingSyncCount(), 1);
   });
+
+  test('concurrent syncPending calls do not double-drain the queue',
+      () async {
+    final store = FakeStore();
+    await store.insertAttendance(_record('s1'));
+    await store.insertAttendance(_record('s2'));
+
+    var posts = 0;
+    final client = MockClient((request) async {
+      posts++;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      return http.Response('{"accepted":true}', 202);
+    });
+
+    final service = SyncService(
+      store: store,
+      client: client,
+      baseUrl: 'http://test.local',
+    );
+
+    // The capture loop and the periodic timer can race; the second drain
+    // must bail out instead of posting the same rows again.
+    final results =
+        await Future.wait([service.syncPending(), service.syncPending()]);
+
+    expect(results, [2, 0]);
+    expect(posts, 2);
+    expect(await store.pendingSyncCount(), 0);
+  });
 }
