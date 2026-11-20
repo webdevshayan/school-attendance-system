@@ -1,0 +1,137 @@
+name: Build APKs
+
+on:
+  pull_request:
+    paths:
+      - "apps/**"
+      - ".github/workflows/build_apks.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: build-apks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build_admin:
+    name: Admin app APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: apps/admin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # Platform folders are generated at build time so the repo stays light.
+      # Phase 2 commits them once camera manifest/gradle customisation lands.
+      - name: Generate Android platform scaffold
+        run: flutter create . --platforms android --org dev.shayan --project-name admin_app
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      # Flutter stable >=3.47 emits an info-level deprecation for
+      # package:flutter/material.dart (superseded by material_ui); infos are
+      # fatal by default on current stable. Keep errors/warnings fatal, let
+      # that known info pass until the Phase 2/3 material_ui migration.
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos
+
+      - name: Run smoke tests
+        run: flutter test
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      # Storage rule: artifacts live for 1 day only, then vanish.
+      - name: Upload APK (retention 1 day)
+        uses: actions/upload-artifact@v4
+        with:
+          name: admin-app-apk
+          path: apps/admin/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  build_parent:
+    name: Parent app APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: apps/parent
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Generate Android platform scaffold
+        run: flutter create . --platforms android --org dev.shayan --project-name parent_app
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      # See the note on the admin job's Analyze step.
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos
+
+      - name: Run smoke tests
+        run: flutter test
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK (retention 1 day)
+        uses: actions/upload-artifact@v4
+        with:
+          name: parent-app-apk
+          path: apps/parent/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  # Belt-and-suspenders storage cleanup: purge any artifact older than 24h,
+  # even if it leaked from another run or branch.
+  purge_stale_artifacts:
+    name: Purge artifacts older than 1 day
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+    needs: [build_admin, build_parent]
+    permissions:
+      actions: write
+    steps:
+      - name: Delete stale artifacts via the API
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cutoff=$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ)
+          ids=$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
+            --paginate --jq ".artifacts[] | select(.created_at < \"$cutoff\") | .id")
+          if [ -z "$ids" ]; then
+            echo "No artifacts older than 1 day. Nothing to purge."
+          else
+            for id in $ids; do
+              echo "Purging artifact $id"
+              gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/$id"
+            done
+          fi

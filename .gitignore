@@ -1,0 +1,35 @@
+# ── secrets: never commit ──────────────────────────────
+.env
+*.env
+!.env.example
+*.pem
+*.key
+*.jks
+keystore/
+secrets*
+serviceAccount*.json
+*.keystore
+*.mobileprovision
+
+# ── dart / flutter ─────────────────────────────────────
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+# pubspec.lock is committed from Phase 2 on for reproducible APK builds
+
+# ── android / ios platform dirs (generated in CI until Phase 2) ──
+android/.gradle/
+android/local.properties
+android/key.properties
+ios/Pods/
+
+# ── vercel ─────────────────────────────────────────────
+.vercel
+
+# ── misc ───────────────────────────────────────────────
+.DS_Store
+.idea/
+*.iml
+*.log
