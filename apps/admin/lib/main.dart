@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
 
+import 'ui/admin_home_page.dart';
+
 void main() => runApp(const AdminApp());
 
 /// Door-side admin app for the school attendance system.
 ///
-/// Phase 1 is a build-verified scaffold. Phase 2 wires in:
-///  * the camera preview pointed at the door,
-///  * on-device face recognition (`face_verification`, TFLite),
-///  * offline attendance writes into local SQLite (`libsql_dart`),
-///  * opportunistic sync to /server whenever connectivity returns.
+/// Phase 2 wires the real pipeline: camera preview -> on-device face
+/// recognition (`face_verification`, bundled FaceNet TFLite) -> attendance
+/// rows in local SQLite (`libsql_dart`) -> background sync to `/api/sync`.
 class AdminApp extends StatelessWidget {
   const AdminApp({super.key});
 
@@ -20,28 +20,7 @@ class AdminApp extends StatelessWidget {
         colorSchemeSeed: Colors.indigo,
         useMaterial3: true,
       ),
-      home: Scaffold(
-        appBar: AppBar(title: const Text('School Attendance - Admin')),
-        body: const Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.face, size: 72),
-              SizedBox(height: 16),
-              Text(
-                'Admin - Attendance Capture',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-              ),
-              SizedBox(height: 8),
-              Text(
-                'Phase 2 lands the camera, on-device face recognition '
-                'and the offline attendance queue.',
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-        ),
-      ),
+      home: const AdminHomePage(),
     );
   }
 }

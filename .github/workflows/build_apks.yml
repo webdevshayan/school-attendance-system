@@ -30,15 +30,51 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # libsql_dart ships a Rust core through Dart native assets; the
+      # toolchain must exist before pub get / test / build touch it.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7a-linux-androideabi,i686-linux-android,x86_64-linux-android
+
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
 
+      # No-op on recent stables where native assets are already the default.
+      - name: Enable Dart native assets
+        run: flutter config --enable-native-assets || echo "flag absent - native assets likely default"
+
       # Platform folders are generated at build time so the repo stays light.
-      # Phase 2 commits them once camera manifest/gradle customisation lands.
       - name: Generate Android platform scaffold
         run: flutter create . --platforms android --org dev.shayan --project-name admin_app
+
+      # The generated manifest lacks the runtime permissions the door app
+      # needs, and tflite_flutter mixes Java targets (harmless: keep it at
+      # warning level instead of failing the gradle build).
+      - name: Patch Android scaffold
+        run: |
+          python3 - <<'PY'
+          manifest = 'android/app/src/main/AndroidManifest.xml'
+          s = open(manifest).read()
+          wanted = ['android.permission.CAMERA', 'android.permission.INTERNET']
+          missing = [p for p in wanted if p not in s]
+          if missing:
+              insert = '\n'.join(
+                  f'    <uses-permission android:name="{p}" />' for p in missing
+              )
+              s = s.replace('    <application', insert + '\n\n    <application', 1)
+              open(manifest, 'w').write(s)
+              print('added permissions:', missing)
+          else:
+              print('permissions already present')
+          props = 'android/gradle.properties'
+          g = open(props).read()
+          if 'kotlin.jvm.target.validation.mode' not in g:
+              with open(props, 'a') as f:
+                  f.write('\nkotlin.jvm.target.validation.mode=warning\n')
+              print('gradle.properties: jvm target validation -> warning')
+          PY
 
       - name: Resolve dependencies
         run: flutter pub get
