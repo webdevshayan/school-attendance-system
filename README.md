@@ -45,6 +45,9 @@ Face at door ──▶ /apps/admin (Flutter)
 | `VERCEL_TOKEN` | `deploy_server.yml` | Vercel account token |
 | `VERCEL_ORG_ID` | `deploy_server.yml` | from `vercel link` |
 | `VERCEL_PROJECT_ID` | `deploy_server.yml` | from `vercel link` |
-| `SYNC_SIGNING_SECRET` | `build_apks.yml` (admin) | HMAC secret shared with the server; baked into the APK via `--dart-define`. Unset ⇒ APK builds with sync disabled |
+| `SYNC_SIGNING_SECRET` | `build_apks.yml` (admin), `smoke_test.yml` | HMAC secret shared with the server; baked into the APK via `--dart-define` and used to sign live E2E requests |
+| `TURSO_DATABASE_URL` | `deploy_server.yml` | Turso database URL (`libsql://…` is fine - the client normalizes it); **bridged into Vercel production env on every deploy** |
+| `TURSO_AUTH_TOKEN` | `deploy_server.yml` | Turso auth token; **bridged into Vercel production env on every deploy** |
+| `NITROPING_WEBHOOK_URL` / `NITROPING_API_KEY` | `deploy_server.yml` | optional push relay; bridged when present, skipped otherwise |
 
-The server also needs **Vercel environment variables** (project settings, never in Actions or the repo): `SYNC_SIGNING_SECRET` (same value), `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, and optionally `NITROPING_WEBHOOK_URL` + `NITROPING_API_KEY` for the push relay. Until the Turso pair is set, `/api/sync` answers 503 and the admin app keeps queueing offline.
+Deploy-time env handling: the Turso (and optional Nitroping) credentials live as **Actions secrets**; every production deploy pushes them into the Vercel project env (`vercel env rm/add`), so rotating a secret here propagates on the next deploy. Values are passed via flags/env, never printed. The deploy step also **verifies `/api/health` after every deploy** and fails the job if production is not serving (a build can succeed and still be runtime-broken - PR #6 lesson). `SYNC_SIGNING_SECRET` must additionally exist as a **Vercel** env var (set once; it validates request signatures at runtime).
