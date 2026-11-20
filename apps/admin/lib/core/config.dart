@@ -32,14 +32,10 @@ class AdminConfig {
   /// --dart-define=SYNC_SIGNING_SECRET=... (CI injects it from the Actions
   /// secret; it never lives in the repo). Empty on local debug builds, which
   /// keeps sync disabled - attendance still queues offline either way.
+  /// (SyncService guards on this directly; there is deliberately no second
+  /// "may I sync" getter so the gate has a single source of truth.)
   static const String syncSigningSecret =
       String.fromEnvironment('SYNC_SIGNING_SECRET');
-
-  /// True when the app may talk to the server: real base URL AND a signing
-  /// secret. [isServerConfigured] stays URL-based for the banner; [canSync]
-  /// gates the actual network calls.
-  static bool get canSync =>
-      isServerConfigured && syncSigningSecret.isNotEmpty;
 
   /// Cosine-similarity threshold for face matches (face_verification default).
   static const double matchThreshold = 0.70;
