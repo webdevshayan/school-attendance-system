@@ -7,6 +7,10 @@ on:
       - "server/**"
       - ".github/workflows/deploy_server.yml"
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "server/**"
+      - ".github/workflows/deploy_server.yml"
 
 concurrency:
   group: deploy-server
@@ -16,10 +20,39 @@ permissions:
   contents: read
 
 jobs:
+  # PR gate: unit tests + vet + gofmt run before any server change can merge.
+  # Merges to main go straight to the deploy job (they were reviewed + green
+  # on the PR).
+  test:
+    name: Go unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: gofmt (fail on unformatted files)
+        working-directory: server
+        run: |
+          unformatted=$(gofmt -l api internal)
+          if [ -n "$unformatted" ]; then
+            echo "::error::Unformatted Go files: $unformatted"
+            exit 1
+          fi
+      - name: go vet
+        working-directory: server
+        run: go vet ./...
+      - name: go test
+        working-directory: server
+        run: go test ./internal/... -count=1
+
   deploy:
     name: Vercel production deploy
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    if: github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v4
 
