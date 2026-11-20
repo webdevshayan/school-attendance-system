@@ -6,12 +6,19 @@ import 'package:flutter/material.dart';
 import '../core/config.dart';
 import '../core/db/local_store.dart';
 import '../core/models/attendance_event.dart';
+import '../core/pairing/event_poller.dart';
+import '../core/pairing/pairing_preferences.dart';
+import '../core/pairing/pairing_service.dart';
 import '../core/push/push_handler.dart';
+import 'pairing_sheet.dart';
 
 enum BootStage { booting, ready, degraded }
 
 /// Parent dashboard: today's status hero, weekly summary and the event
 /// timeline, fed by the local cache and refreshed live as pushes arrive.
+/// Phase 5 adds the pairing flow: an unpaired install shows a pairing
+/// banner; a paired one polls the server's events feed into the same
+/// PushHandler the live push channel will use later.
 /// Storage is optional at runtime - when the plugin layer is missing (fresh
 /// CI widget test, half-set-up device) the page degrades with a Retry
 /// button instead of crashing.
@@ -28,6 +35,9 @@ class _DashboardPageState extends State<DashboardPage> {
   LocalAttendanceStore? _store;
   PushHandler? _push;
   StreamSubscription<AttendanceEvent>? _pushSub;
+  PairingService? _pairing;
+  EventPoller? _poller;
+  String? _studentId;
   List<AttendanceEvent> _today = const [];
   bool _checkedInToday = false;
   int _presentDays = 0;
@@ -41,6 +51,7 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void dispose() {
     _pushSub?.cancel();
+    _poller?.stop();
     _push?.dispose();
     _store?.close();
     super.dispose();
@@ -57,6 +68,16 @@ class _DashboardPageState extends State<DashboardPage> {
       final push = PushHandler(store: store);
       _push = push;
       _pushSub = push.events.listen((_) => _refresh());
+      // Pairing is optional infrastructure: a missing plugin layer degrades
+      // to the debug fallback instead of blocking the whole dashboard.
+      try {
+        final service = PairingService(prefs: SqflitePairingPreferences());
+        _pairing = service;
+        _studentId = await service.pairedStudentId();
+        _startPoller();
+      } catch (_) {
+        _studentId = null;
+      }
     } catch (error) {
       _fail('Local storage unavailable: $error');
       return;
@@ -64,6 +85,34 @@ class _DashboardPageState extends State<DashboardPage> {
     await _refresh();
     if (!mounted) return;
     setState(() => _stage = BootStage.ready);
+  }
+
+  void _startPoller() {
+    final push = _push;
+    final service = _pairing;
+    if (push == null || service == null) return;
+    _poller?.stop();
+    final poller = EventPoller(
+      pairing: service,
+      push: push,
+      onRevoked: () => _reloadPairing(),
+    );
+    _poller = poller;
+    poller.start();
+  }
+
+  /// Re-reads the pairing state (after pairing or a server-side revocation).
+  Future<void> _reloadPairing() async {
+    final service = _pairing;
+    if (service == null) return;
+    _studentId = await service.pairedStudentId();
+    if (!mounted) return;
+    if (_studentId != null) {
+      _startPoller();
+    } else {
+      _poller?.stop();
+    }
+    setState(() {});
   }
 
   void _fail(String message) {
@@ -77,11 +126,11 @@ class _DashboardPageState extends State<DashboardPage> {
   Future<void> _refresh() async {
     final store = _store;
     if (store == null) return;
+    final studentId = _studentId ?? ChildConfig.childId;
     final now = DateTime.now().toUtc();
     final today = await store.eventsForDay(now);
-    final checkedIn =
-        await store.hasStatusOnDay(ChildConfig.childId, 'in', now);
-    final days = await store.presentDaysLastWeek(ChildConfig.childId, now);
+    final checkedIn = await store.hasStatusOnDay(studentId, 'in', now);
+    final days = await store.presentDaysLastWeek(studentId, now);
     if (!mounted) return;
     setState(() {
       _today = today;
@@ -90,13 +139,26 @@ class _DashboardPageState extends State<DashboardPage> {
     });
   }
 
+  Future<void> _openPairingSheet() async {
+    final service = _pairing;
+    if (service == null) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => PairingSheet(
+        service: service,
+        onPaired: (_) => _reloadPairing(),
+      ),
+    );
+  }
+
   /// Debug hook: feeds a sample push through the real pipeline so the
-  /// dashboard can be exercised before Phase 4 wires the live channel.
+  /// dashboard can be exercised before the install is paired.
   Future<void> _simulatePush() async {
     final push = _push;
     if (push == null) return;
     await push.handle(<String, dynamic>{
-      'student_id': ChildConfig.childId,
+      'student_id': _studentId ?? ChildConfig.childId,
       'student_name': ChildConfig.childName,
       'status': _checkedInToday ? 'out' : 'in',
       'marked_at': DateTime.now().toUtc().toIso8601String(),
@@ -167,6 +229,8 @@ class _DashboardPageState extends State<DashboardPage> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        if (_studentId == null) _pairingBanner(),
+        if (_studentId != null && _poller?.lastError != null) _feedErrorBanner(),
         _heroCard(),
         const SizedBox(height: 12),
         _chip(Icons.event_available, '$_presentDays/7 days this week'),
@@ -202,6 +266,68 @@ class _DashboardPageState extends State<DashboardPage> {
             onPressed: _simulatePush,
           ),
       ],
+    );
+  }
+
+  /// Banner shown while this install follows the debug fallback student.
+  Widget _pairingBanner() {
+    return Card(
+      color: Colors.blue.shade50,
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.link_off, color: Colors.blue.shade800),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'This device isn\'t paired to a child yet',
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Enter the pairing code the school gave you to see your '
+              'child\'s live attendance. Until then the dashboard shows '
+              'demo data only.',
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              icon: const Icon(Icons.link),
+              label: const Text('Pair with a code'),
+              onPressed: _openPairingSheet,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _feedErrorBanner() {
+    return Card(
+      color: Colors.orange.shade50,
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            Icon(Icons.wifi_off, color: Colors.orange.shade800, size: 18),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Live updates paused: ${_poller?.lastError}',
+                style: const TextStyle(fontSize: 13),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
