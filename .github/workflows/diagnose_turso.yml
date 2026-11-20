@@ -1,0 +1,27 @@
+name: Diagnose Turso
+
+# Temporary incident diagnostic (re-opened): MintCode -> FindCode round-trip
+# with the deployed credentials, printing the raw read-back. Remove once the
+# pairing chain is green end to end.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    name: Turso round-trip
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Probe Turso store round-trip
+        working-directory: server
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+        run: go run ./diag
