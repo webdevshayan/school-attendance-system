@@ -67,9 +67,9 @@ class SqflitePairingPreferences implements PairingPreferences {
 
   @override
   Future<void> clear() async {
+    // Keep the open handle (review G3) - only the rows go away.
     final database = await _open();
     await database.delete('settings');
-    _db = null;
   }
 }
 

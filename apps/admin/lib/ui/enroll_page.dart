@@ -141,16 +141,19 @@ class _EnrollPageState extends State<EnrollPage> {
         .showSnackBar(SnackBar(content: Text(message)));
   }
 
-  /// Mints and displays a parent-pairing code for [student]. The dialog
-  /// resolves the mint future so failures surface inside it as retry hints.
+  /// Mints and displays a parent-pairing code for [student]. The mint future
+  /// is computed ONCE here (review G2): a FutureBuilder inside the dialog
+  /// builder would re-fire the request if the route ever rebuilt, silently
+  /// minting a second code.
   Future<void> _showPairingCode(Student student) async {
     final service = widget.codeService ?? CodeService();
+    final mintFuture = service.mint(student.id);
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: Text('Pairing code - ${student.name}'),
         content: FutureBuilder<PairingCodeInfo?>(
-          future: service.mint(student.id),
+          future: mintFuture,
           builder: (context, snapshot) {
             if (snapshot.connectionState != ConnectionState.done) {
               return const SizedBox(

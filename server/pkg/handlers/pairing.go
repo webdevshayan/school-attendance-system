@@ -214,6 +214,11 @@ func Pair(d Deps, w http.ResponseWriter, r *http.Request) {
 // Events is the paired install's polling feed: bearer-authenticated, cursor
 // based, oldest first. Payloads reuse the /api/sync wire shape so the parent
 // app's PushHandler consumes them unchanged.
+//
+// Unlike the write paths, this handler deliberately does NOT run schema Init
+// (review G4): the read path polls every 30 s and the write paths that must
+// have run before it (mint → pair) already bootstrap the schema; an Init per
+// poll would add a wasted round-trip to the hottest endpoint.
 func Events(d Deps, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed, use GET"})
