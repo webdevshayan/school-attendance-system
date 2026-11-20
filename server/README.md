@@ -1,12 +1,23 @@
 # Server (Go on Vercel + Turso)
 
-Serverless API deployed to Vercel. Phase 4 is live: signed requests, device allowlist, Turso persistence and best-effort push fan-out.
+Serverless API deployed to Vercel. Phase 4 is live: signed requests, device allowlist, Turso persistence and best-effort push fan-out. Phase 5 adds the pairing layer: door-minted codes, a guardian device registry and the parent events feed.
 
 | Endpoint | Method | Purpose |
 | --- | --- | --- |
 | `/api/health` | GET | Liveness + which integrations are configured (`signing`, `turso`, `fanout` fields) |
 | `/api/register` | POST | Adds a signed device to the sync allowlist (idempotent upsert) |
 | `/api/sync` | POST | Validates, de-duplicates and persists one attendance row; fans out a push |
+| `/api/codes` | POST | Mints a parent-pairing code for a student (signed, registered door devices only) |
+| `/api/pair` | POST | Redeems a code: binds a parent install to the student, returns its bearer token once |
+| `/api/events` | GET | Cursor feed of a paired student's attendance rows (Bearer token; 100 rows max) |
+
+## Pairing & guardian registry (Phase 5)
+
+- **Minting**: a registered door device HMAC-signs `{student_id}` to `POST /api/codes`; the server answers `{code, student_id, expires_at}` (8 chars, lookalike-free alphabet, 7-day TTL, multi-use so both guardians pair from one code).
+- **Redemption**: the parent app posts `{code, label, platform}` to `POST /api/pair` — the code itself is the credential. Unknown → `400`; expired → `410`. Success returns `{student_id, token}` **exactly once**; the server stores only the token's SHA-256 (`parent_devices.token_hash`).
+- **Feed**: `GET /api/events?since=<id>` with `Authorization: Bearer <token>` returns the paired student's rows oldest-first with a `cursor`; payloads reuse the `/api/sync` wire shape (`device_id`, `student_id`, `status`, `marked_at`), so the parent app's `PushHandler` consumes them unchanged. Rows for other students never cross the boundary.
+- This is the delivery channel that works today; when the Nitroping relay credentials land, the same `parent_devices` registry drives real push fan-out.
+
 
 ## Wire contract (both POST endpoints)
 

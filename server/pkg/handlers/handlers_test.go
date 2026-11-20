@@ -21,13 +21,20 @@ type fakeStore struct {
 	devices   map[string]string
 	rows      []store.Row
 	seen      map[string]bool
+	codes     map[string]store.PairingCode
+	parents   map[string]string // tokenHash -> studentID
 	existsErr error
 	insertErr error
 	initErr   error
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{devices: map[string]string{}, seen: map[string]bool{}}
+	return &fakeStore{
+		devices: map[string]string{},
+		seen:    map[string]bool{},
+		codes:   map[string]store.PairingCode{},
+		parents: map[string]string{},
+	}
 }
 
 func (f *fakeStore) Init(_ context.Context) error { return f.initErr }
@@ -56,6 +63,39 @@ func (f *fakeStore) DeviceExists(_ context.Context, deviceID string) (bool, erro
 	}
 	_, ok := f.devices[deviceID]
 	return ok, nil
+}
+
+func (f *fakeStore) MintCode(_ context.Context, c store.PairingCode) error {
+	f.codes[c.Code] = c
+	return nil
+}
+
+func (f *fakeStore) FindCode(_ context.Context, code string) (store.PairingCode, bool, error) {
+	c, ok := f.codes[code]
+	return c, ok, nil
+}
+
+func (f *fakeStore) UpsertParentDevice(_ context.Context, d store.ParentDevice) error {
+	f.parents[d.TokenHash] = d.StudentID
+	return nil
+}
+
+func (f *fakeStore) StudentForToken(_ context.Context, tokenHash string) (string, error) {
+	return f.parents[tokenHash], nil
+}
+
+func (f *fakeStore) EventsSince(_ context.Context, studentID string, sinceID int64, limit int) ([]store.EventRecord, error) {
+	events := make([]store.EventRecord, 0, limit)
+	for i, r := range f.rows {
+		id := int64(i + 1)
+		if r.StudentID == studentID && id > sinceID && len(events) < limit {
+			events = append(events, store.EventRecord{
+				ID: id, DeviceID: r.DeviceID, StudentID: r.StudentID,
+				Status: r.Status, MarkedAt: r.MarkedAt,
+			})
+		}
+	}
+	return events, nil
 }
 
 type fakePusher struct {

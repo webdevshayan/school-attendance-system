@@ -30,20 +30,6 @@ type Device struct {
 	Label    string
 }
 
-// Store is the persistence seam; handlers depend on this interface so tests
-// can run without a database.
-type Store interface {
-	// Init creates the schema. Safe to call on every cold start.
-	Init(ctx context.Context) error
-	// InsertRow stores one attendance mark. It returns false when the exact
-	// row (device, student, status, instant) already exists.
-	InsertRow(ctx context.Context, r Row) (bool, error)
-	// UpsertDevice registers or refreshes a device.
-	UpsertDevice(ctx context.Context, d Device) error
-	// DeviceExists reports whether the device is on the allowlist.
-	DeviceExists(ctx context.Context, deviceID string) (bool, error)
-}
-
 // TursoStore is the Turso-backed Store implementation.
 type TursoStore struct {
 	c    *turso.Client
@@ -56,8 +42,8 @@ func NewTurso(c *turso.Client) *TursoStore {
 	return &TursoStore{c: c, Now: func() time.Time { return time.Now().UTC() }}
 }
 
-// Init creates the schema; the CREATE TABLE IF NOT EXISTS pair runs in one
-// pipeline request, so it is one round-trip and idempotent.
+// Init creates the schema; all four CREATE TABLE IF NOT EXISTS statements
+// run in one pipeline request, so it is one round-trip and idempotent.
 func (s *TursoStore) Init(ctx context.Context) error {
 	if s.init {
 		return nil
@@ -76,6 +62,19 @@ func (s *TursoStore) Init(ctx context.Context) error {
   device_id TEXT PRIMARY KEY,
   label TEXT NOT NULL DEFAULT '',
   registered_at TEXT NOT NULL
+)`},
+		turso.Statement{SQL: `CREATE TABLE IF NOT EXISTS pairing_codes (
+  code TEXT PRIMARY KEY,
+  student_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+)`},
+		turso.Statement{SQL: `CREATE TABLE IF NOT EXISTS parent_devices (
+  token_hash TEXT PRIMARY KEY,
+  student_id TEXT NOT NULL,
+  label TEXT NOT NULL DEFAULT '',
+  platform TEXT NOT NULL DEFAULT '',
+  paired_at TEXT NOT NULL
 )`},
 	)
 	if err == nil {

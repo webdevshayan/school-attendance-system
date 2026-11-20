@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -50,10 +51,27 @@ func New(baseURL, token string) *Client {
 	}
 }
 
-// Result summarizes one executed statement.
+// Cell is one typed value in a returned row (libSQL wire types: text,
+// integer, real, blob, null). The helpers coerce the common cases.
+type Cell struct {
+	Type  string `json:"type"`
+	Value string `json:"value"` // libSQL encodes every value as a string
+}
+
+// Str returns the cell value as a string (works for every type).
+func (c Cell) Str() string { return c.Value }
+
+// Int parses the cell as an integer; 0 for null/unparseable values.
+func (c Cell) Int() int64 {
+	n, _ := strconv.ParseInt(c.Value, 10, 64)
+	return n
+}
+
+// Result summarizes one executed statement. SELECTs surface their rows.
 type Result struct {
-	AffectedRowCount int64 // DML statements (INSERT/UPDATE/DELETE)
-	RowCount         int   // SELECT statements: number of rows returned
+	AffectedRowCount int64    // DML statements (INSERT/UPDATE/DELETE)
+	RowCount         int      // len(Rows)
+	Rows             [][]Cell // SELECT statements: the returned rows, in order
 }
 
 // Execute runs the statements in one pipeline request and returns a Result
@@ -135,9 +153,21 @@ func (c *Client) Execute(ctx context.Context, stmts ...Statement) ([]Result, err
 			// means the server answered out of order.
 			return nil, fmt.Errorf("turso: statement %d: unexpected result shape", i)
 		}
-		var rows []json.RawMessage
-		_ = json.Unmarshal(exec.Rows, &rows) // absent/null for DML → 0 rows
-		affected = append(affected, Result{AffectedRowCount: exec.AffectedRowCount, RowCount: len(rows)})
+		// Row objects: {"type":"row","row":[{"type":"text","value":"x"},…]}.
+		// Absent/null rows field (DML) → nil.
+		var rowObjs []struct {
+			Row []Cell `json:"row"`
+		}
+		_ = json.Unmarshal(exec.Rows, &rowObjs)
+		rows := make([][]Cell, 0, len(rowObjs))
+		for _, obj := range rowObjs {
+			rows = append(rows, obj.Row)
+		}
+		affected = append(affected, Result{
+			AffectedRowCount: exec.AffectedRowCount,
+			RowCount:         len(rows),
+			Rows:             rows,
+		})
 	}
 	if len(affected) != len(stmts) {
 		return nil, fmt.Errorf("turso: pipeline returned %d results for %d statements", len(parsed.Results), len(stmts))

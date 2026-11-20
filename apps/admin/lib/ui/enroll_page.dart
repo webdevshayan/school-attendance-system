@@ -5,10 +5,13 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 
 import '../core/db/attendance_store.dart';
+import '../core/pairing/code_service.dart';
 import '../core/recognition/face_service.dart';
 
 /// Registers a student: name (+ optional id) -> camera snap -> on-device
-/// face sample + local database row.
+/// face sample + local database row. Each student row also mints a parent
+/// pairing code (Phase 5) so the guardians can follow that child's
+/// attendance from the parent app.
 class EnrollPage extends StatefulWidget {
   const EnrollPage({
     super.key,
@@ -16,12 +19,16 @@ class EnrollPage extends StatefulWidget {
     required this.face,
     required this.camera,
     required this.onChanged,
+    this.codeService,
   });
 
   final AttendanceStore store;
   final FaceService face;
   final CameraController? camera;
   final Future<void> Function() onChanged;
+
+  /// Injectable for tests; defaults to a production-configured service.
+  final CodeService? codeService;
 
   @override
   State<EnrollPage> createState() => _EnrollPageState();
@@ -134,6 +141,65 @@ class _EnrollPageState extends State<EnrollPage> {
         .showSnackBar(SnackBar(content: Text(message)));
   }
 
+  /// Mints and displays a parent-pairing code for [student]. The mint future
+  /// is computed ONCE here (review G2): a FutureBuilder inside the dialog
+  /// builder would re-fire the request if the route ever rebuilt, silently
+  /// minting a second code.
+  Future<void> _showPairingCode(Student student) async {
+    final service = widget.codeService ?? CodeService();
+    final mintFuture = service.mint(student.id);
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Pairing code - ${student.name}'),
+        content: FutureBuilder<PairingCodeInfo?>(
+          future: mintFuture,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const SizedBox(
+                height: 48,
+                child: Center(child: CircularProgressIndicator()),
+              );
+            }
+            final info = snapshot.data;
+            if (info == null) {
+              return const Text(
+                'Could not mint a code right now. Check connectivity and '
+                'that this device is registered, then try again.',
+              );
+            }
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SelectableText(
+                  info.code,
+                  style: const TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 4,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Give this code to ${student.name}\'s guardians. Both '
+                  'parents can pair with it until '
+                  '${info.expiresAt.toLocal().toString().split(' ').first}.',
+                ),
+              ],
+            );
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -177,9 +243,19 @@ class _EnrollPageState extends State<EnrollPage> {
               leading: const Icon(Icons.face),
               title: Text(student.name),
               subtitle: Text(student.id),
-              trailing: IconButton(
-                icon: const Icon(Icons.delete_outline),
-                onPressed: () => unawaited(_remove(student)),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: 'Pairing code for the guardians',
+                    icon: const Icon(Icons.key),
+                    onPressed: () => unawaited(_showPairingCode(student)),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () => unawaited(_remove(student)),
+                  ),
+                ],
               ),
             ),
           ),
