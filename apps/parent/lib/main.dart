@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 
+import 'ui/dashboard_page.dart';
+
 void main() => runApp(const ParentApp());
 
 /// Parent-facing app for the school attendance system.
 ///
-/// Phase 1 is a build-verified scaffold. Phase 3 wires in:
-///  * Nitroping push notifications when the child's attendance syncs,
-///  * the engaging visual attendance dashboard (status, history, streaks).
+/// Phase 3 wires the engaging dashboard (today's status, event timeline,
+/// weekly summary) fed by a local cache; push handling is transport-agnostic
+/// and Phase 4 connects it to the server's fan-out.
 class ParentApp extends StatelessWidget {
   const ParentApp({super.key});
 
@@ -18,28 +20,7 @@ class ParentApp extends StatelessWidget {
         colorSchemeSeed: Colors.teal,
         useMaterial3: true,
       ),
-      home: Scaffold(
-        appBar: AppBar(title: const Text('School Attendance - Parent')),
-        body: const Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.notifications_active, size: 72),
-              SizedBox(height: 16),
-              Text(
-                'Parent - Attendance Dashboard',
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-              ),
-              SizedBox(height: 8),
-              Text(
-                'Phase 3 lands the Nitroping push notifications '
-                'and the visual attendance dashboard.',
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-        ),
-      ),
+      home: const DashboardPage(),
     );
   }
 }
