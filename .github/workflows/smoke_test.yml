@@ -1,0 +1,44 @@
+name: Smoke Test (live E2E)
+
+# Proves the deployed service behaves per contract: health, signed register,
+# signed sync + server-side de-dup, pairing-code minting, pairing redemption
+# and the bearer-authenticated events feed. Runs automatically after every
+# successful production deploy and can be triggered manually.
+on:
+  workflow_dispatch: {}
+  workflow_run:
+    workflows: ["Deploy Server"]
+    types: [completed]
+
+concurrency:
+  group: smoke-test
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: Live end-to-end
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Run live E2E against production
+        working-directory: server
+        env:
+          BASE_URL: https://rgs-attendance-system.vercel.app
+          SYNC_SIGNING_SECRET: ${{ secrets.SYNC_SIGNING_SECRET }}
+        run: |
+          if [ -z "$SYNC_SIGNING_SECRET" ]; then
+            echo "::error::Missing repo secret 'SYNC_SIGNING_SECRET' - needed to sign requests like a real door device"
+            exit 1
+          fi
+          go run ./smoke

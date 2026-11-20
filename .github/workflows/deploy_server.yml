@@ -36,7 +36,7 @@ jobs:
       - name: gofmt (fail on unformatted files)
         working-directory: server
         run: |
-          unformatted=$(gofmt -l api pkg)
+          unformatted=$(gofmt -l api cmd pkg index.go main.go smoke)
           if [ -n "$unformatted" ]; then
             echo "::error::Unformatted Go files: $unformatted"
             exit 1
@@ -62,9 +62,11 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
         run: |
           missing=0
-          for v in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID; do
+          for v in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID TURSO_DATABASE_URL TURSO_AUTH_TOKEN; do
             if [ -z "${!v}" ]; then
               echo "::error::Missing repo secret '$v' - add it under Settings > Secrets and variables > Actions"
               missing=1
@@ -76,13 +78,14 @@ jobs:
         with:
           node-version: "20"
 
-      # The remote build requires Framework Preset "Other": the server is
-      # serverless functions in api/, built by Vercel's Go runtime - there is
-      # no main.go. A Golang app preset fails with "No Go entrypoint found".
-      # Heal the project setting via the API so an accidental preset flip in
-      # the dashboard can't break deploys. The token is used in-place, never
-      # printed.
-      - name: Ensure framework preset is Other (self-heal)
+      # The project uses the "Go" framework preset (slug "go"): its detector
+      # matches go.mod + main.go and it builds index.go with @vercel/go - one
+      # catch-all serverless function whose Handler dispatches every /api/*
+      # route. History: before index.go existed the preset failed with
+      # "No Go entrypoint found", so the workflow used to force "Other";
+      # the deploy step below still falls back to that automatically if the
+      # Go-preset build ever fails. The token is used in-place, never printed.
+      - name: Ensure framework preset is Go (self-heal)
         working-directory: server
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -93,7 +96,7 @@ jobs:
             curl -sS -o /tmp/vercel_project.json -w '%{http_code}' -X PATCH \
               -H "Authorization: Bearer $VERCEL_TOKEN" \
               -H "Content-Type: application/json" \
-              "$1" -d '{"framework": null}'
+              "$1" -d '{"framework": "go"}'
           }
           code=$(patch_project "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID?teamId=$VERCEL_ORG_ID")
           if [ "$code" != 200 ]; then
@@ -101,12 +104,56 @@ jobs:
             code=$(patch_project "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID")
           fi
           if [ "$code" = 200 ]; then
-            echo "Framework preset ensured (Other)."
+            echo "Framework preset ensured (Go)."
           else
-            echo "::error::Could not set the framework preset to Other (HTTP $code). Flip it manually: Vercel dashboard -> rgs-attendance-system -> Settings -> Build & Output Settings -> Framework Preset -> Other, then re-run this workflow."
+            echo "::error::Could not set the framework preset to Go (HTTP $code). Flip it manually: Vercel dashboard -> rgs-attendance-system -> Settings -> Build & Output Settings -> Framework Preset -> Go, then re-run this workflow."
             exit 1
           fi
 
+      # The runtime env lives on the Vercel project, not in Actions - so the
+      # credentials kept in repo secrets are pushed into Vercel (production)
+      # before every deploy. Rotating a secret here propagates on the next
+      # run; the values are passed via flags/env, never printed.
+      - name: Bridge Turso credentials into Vercel (production)
+        working-directory: server
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          NITROPING_WEBHOOK_URL: ${{ secrets.NITROPING_WEBHOOK_URL }}
+          NITROPING_API_KEY: ${{ secrets.NITROPING_API_KEY }}
+        run: |
+          sync_env() {
+            name="$1"; val="$2"; required="$3"
+            if [ -z "$val" ]; then
+              if [ "$required" = "required" ]; then
+                echo "::error::Missing repo secret '$name' - add it under Settings > Secrets and variables > Actions"
+                missing=1
+              else
+                echo "optional $name not set in Actions secrets - skipping (push fan-out stays disabled)"
+              fi
+              return
+            fi
+            # Replace the production value so rotations propagate. A var that
+            # does not exist yet (or a prompting CLI) is handled by || true.
+            printf 'y\n' | npx --yes vercel@latest env rm "$name" production --yes >/dev/null 2>&1 || true
+            npx --yes vercel@latest env add "$name" production --value "$val" >/dev/null
+            echo "synced $name -> Vercel (production)"
+          }
+          missing=0
+          sync_env TURSO_DATABASE_URL "$TURSO_DATABASE_URL" required
+          sync_env TURSO_AUTH_TOKEN "$TURSO_AUTH_TOKEN" required
+          sync_env NITROPING_WEBHOOK_URL "$NITROPING_WEBHOOK_URL" optional
+          sync_env NITROPING_API_KEY "$NITROPING_API_KEY" optional
+          exit $missing
+
+      # Remote build (no pull/build/--prebuilt): Vercel compiles the Go
+      # runtime on its own infra. If the Go-preset build ever fails (the
+      # Phase 2 regression), fall back to the per-file api/ shape under the
+      # "Other" preset and retry once - production never serves a broken
+      # deploy, so this only ever widens compatibility.
       - name: Deploy server/ to Vercel (production, remote build)
         working-directory: server
         env:
@@ -114,9 +161,26 @@ jobs:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
-          # VERCEL_TOKEN / VERCEL_ORG_ID / VERCEL_PROJECT_ID come from the env
-          # block above; the CLI picks them up without --token on the command
-          # line. Remote build (no pull/build/--prebuilt): Vercel compiles the
-          # Go runtime on its own infra - the local prebuilt flow broke with
-          # ENOENT on the built bootstrap binary (CLI 66.x quirk).
+          set +e
           npx --yes vercel@latest deploy --prod
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            echo "::warning::Deploy with the Go framework preset failed (rc=$rc) - patching preset to Other (api/*.go module mode) and retrying once"
+            patch_project() {
+              curl -sS -o /dev/null -w '%{http_code}' -X PATCH \
+                -H "Authorization: Bearer $VERCEL_TOKEN" \
+                -H "Content-Type: application/json" \
+                "$1" -d '{"framework": null}'
+            }
+            code=$(patch_project "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID?teamId=$VERCEL_ORG_ID")
+            if [ "$code" != 200 ]; then
+              patch_project "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID" >/dev/null
+            fi
+            if ! npx --yes vercel@latest deploy --prod; then
+              echo "::error::Deploy failed with both the Go preset and the Other fallback"
+              exit 1
+            fi
+            echo "Deployed with the Other fallback (api/*.go). Investigate the Go-preset build log above."
+          else
+            echo "Deployed with the Go framework preset (index.go catch-all function)."
+          fi
