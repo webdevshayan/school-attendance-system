@@ -100,19 +100,22 @@ func (f *fakeTurso) handler() http.Handler {
 				results = append(results,
 					`{"type":"error","error":{"message":`+jsonString(res.errMsg)+`}}`)
 			case res.textRows != nil:
+				// The REAL v2 pipeline shape: rows as plain arrays of values
+				// (the fake used the legacy typed-cell shape until the live
+				// incident proved the real API answers this way).
 				rows := ""
 				for j, rowVals := range res.textRows {
-					cells := ""
-					for k, v := range rowVals {
-						if k > 0 {
-							cells += ","
-						}
-						cells += `{"type":"text","value":` + jsonString(v) + `}`
-					}
 					if j > 0 {
 						rows += ","
 					}
-					rows += `{"type":"row","row":[` + cells + `]}`
+					rows += "["
+					for k, v := range rowVals {
+						if k > 0 {
+							rows += ","
+						}
+						rows += jsonString(v)
+					}
+					rows += "]"
 				}
 				results = append(results, `{"type":"ok","response":{"result":{"type":"ok","cols":[],"rows":[`+rows+`],"affected_row_count":0}}}`)
 			case res.affected >= 0:
@@ -120,10 +123,10 @@ func (f *fakeTurso) handler() http.Handler {
 			default:
 				rows := ""
 				for j := 0; j < res.rows; j++ {
-					rows += `{"type":"row","row":[{"type":"integer","value":"1"}]}`
 					if j < res.rows-1 {
 						rows += ","
 					}
+					rows += `[[1]]`
 				}
 				results = append(results, `{"type":"ok","response":{"result":{"type":"ok","cols":[{"name":"1"}],"rows":[`+rows+`],"affected_row_count":0}}}`)
 			}

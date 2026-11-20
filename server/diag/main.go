@@ -1,11 +1,16 @@
-// Command diag runs a MintCode -> FindCode round-trip against the live
-// Turso using pkg/store (the exact code path the pair endpoint uses) and
-// prints the raw read-back record. Temporary incident diagnostic.
+// Command diag probes the live Turso with the deployed credentials: a
+// MintCode -> FindCode round-trip through pkg/store, plus the RAW response
+// body of a SELECT so the exact wire shape is visible. Temporary incident
+// diagnostic - the token is never printed.
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"time"
 
@@ -13,8 +18,26 @@ import (
 	"github.com/webdevshayan/school-attendance-system/server/pkg/turso"
 )
 
+// rawSelect posts one SELECT straight to /v2/pipeline and prints the body.
+func rawSelect(baseURL, token string) {
+	payload := `{"requests":[{"type":"execute","stmt":{"sql":"SELECT code, student_id, created_at, expires_at FROM pairing_codes LIMIT 2"}},{"type":"close"}]}`
+	req, _ := http.NewRequest(http.MethodPost, baseURL+"/v2/pipeline", bytes.NewReader([]byte(payload)))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Println("raw SELECT transport ERROR:", err)
+		return
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	fmt.Printf("raw SELECT HTTP %d body: %s\n", res.StatusCode, string(body))
+}
+
 func main() {
-	client := turso.New(os.Getenv("TURSO_DATABASE_URL"), os.Getenv("TURSO_AUTH_TOKEN"))
+	baseURL := os.Getenv("TURSO_DATABASE_URL")
+	token := os.Getenv("TURSO_AUTH_TOKEN")
+	client := turso.New(baseURL, token)
 	st := store.NewTurso(client)
 	ctx := context.Background()
 
@@ -44,15 +67,14 @@ func main() {
 	}
 	fmt.Printf("FindCode ok=%v record=%+v\n", ok, found)
 
-	events, err := st.EventsSince(ctx, "smoke-e2e", 0, 5)
-	if err != nil {
-		fmt.Println("EventsSince ERROR:", err)
-		os.Exit(1)
-	}
-	fmt.Printf("EventsSince rows=%d first=%+v\n", len(events), func() any {
-		if len(events) > 0 {
-			return events[0]
-		}
-		return "none"
-	}())
+	rawSelect(normalizeForLog(baseURL), token)
+	_ = json.Valid // keep encoding/json imported for future probes
 }
+
+// normalizeForLog only shapes the URL for printing (never prints the token).
+func normalizeForLog(raw string) string {
+	c := turso.New(raw, "t")
+	return c.BaseURL
+}
+
+var _ = context.Background

@@ -19,14 +19,17 @@ import (
 // Arg is one positional statement argument.
 type Arg struct {
 	Type  string `json:"type"`  // "text" or "integer"
-	Value any    `json:"value"` // string for text, int64 for integer
+	Value any    `json:"value"` // both encode as JSON strings (Hrana quirk)
 }
 
 // Text builds a text argument.
 func Text(v string) Arg { return Arg{Type: "text", Value: v} }
 
-// Integer builds an integer argument.
-func Integer(v int64) Arg { return Arg{Type: "integer", Value: v} }
+// Integer builds an integer argument. Hrana (and the v2 pipeline) expects
+// the value as a STRING to avoid 64-bit precision loss in JSON numbers -
+// the live diagnostic proved it: value 0 as a number fails with
+// "invalid type: integer `0`, expected a borrowed string".
+func Integer(v int64) Arg { return Arg{Type: "integer", Value: strconv.FormatInt(v, 10)} }
 
 // Statement is one SQL statement with positional arguments.
 type Statement struct {

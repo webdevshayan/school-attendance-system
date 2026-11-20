@@ -84,8 +84,8 @@ func TestExecuteSendsTypedStatementsAndReturnsAffectedCounts(t *testing.T) {
 	if args[0].Type != "text" || string(args[0].Value) != `"abc"` {
 		t.Errorf("text arg = %+v, want text \"abc\"", args[0])
 	}
-	if args[1].Type != "integer" || string(args[1].Value) != `42` {
-		t.Errorf("integer arg = %+v, want integer 42 (JSON number, not string)", args[1])
+	if args[1].Type != "integer" || string(args[1].Value) != `"42"` {
+		t.Errorf("integer arg = %+v, want integer 42 as a JSON string (Hrana expects string values)", args[1])
 	}
 }
 
