@@ -13,19 +13,20 @@ Face at door ──▶ /apps/admin (Flutter)
                                                              visual dashboard
 ```
 
-| Component | Path | Phase 1 status |
+| Component | Path | Status |
 | --- | --- | --- |
-| Admin App (Flutter, door-side capture) | `apps/admin` | Phase 2: camera + FaceNet recognition + libsql_dart queue + sync |
-| Parent App (Flutter, dashboard + push) | `apps/parent` | Phase 3: dashboard + local cache + push handling scaffold |
-| Serverless API (Go on Vercel) | `server` | `/api/health` live, `/api/sync` stub |
-| CI/CD | `.github/workflows` | Both pipelines live |
+| Admin App (Flutter, door-side capture) | `apps/admin` | Phase 2: camera + FaceNet recognition + libsql_dart queue; Phase 4: signed sync + device registration |
+| Parent App (Flutter, dashboard + push) | `apps/parent` | Phase 3: dashboard + local cache + push handling scaffold (fan-out seam ready) |
+| Serverless API (Go on Vercel) | `server` | **Live**: `/api/health`, signed `/api/sync` with Turso persistence + de-dup, `/api/register`, push fan-out seam |
+| CI/CD | `.github/workflows` | Both pipelines live + Go test gate on PRs |
 
 ## Roadmap
 
-- **Phase 1 — Scaffold & pipelines (this PR):** monorepo layout, Flutter boilerplate for both apps, Go API stub on Vercel, `build_apks.yml` + `deploy_server.yml`.
+- **Phase 1 — Scaffold & pipelines (landed):** monorepo layout, Flutter boilerplate for both apps, Go API stub on Vercel, `build_apks.yml` + `deploy_server.yml`.
 - **Phase 2 — Admin core (landed):** camera preview, on-device recognition (`face_verification`, bundled FaceNet TFLite), offline attendance writes via `libsql_dart`, background sync to `/api/sync`.
-- **Phase 3 — Parent core (landed):** engaging dashboard (today status, event timeline, weekly summary), local SQLite cache (sqflite, de-duplicated), transport-agnostic push handling — Phase 4 connects the live fan-out channel.
-- **Phase 4 — Backend integration:** Turso persistence in `/api/sync` with device registration + signed requests (the endpoint must not persist unauthenticated writes), push fan-out.
+- **Phase 3 — Parent core (landed):** engaging dashboard (today status, event timeline, weekly summary), local SQLite cache (sqflite, de-duplicated), transport-agnostic push handling.
+- **Phase 4 — Backend integration (landed):** signed requests (HMAC-SHA256 headers + 5-minute replay window), device registration allowlist, Turso persistence with server-side de-dup, best-effort Nitroping push fan-out seam. Live channel activation = set the relay env vars; the parent app needs no change (`PushHandler` is the seam).
+- **Next — pairing & guardian routing:** parent install ↔ child pairing flow, guardian device-token registry on the server, live Nitroping relay credentials.
 
 ## CI/CD & storage hygiene
 
@@ -43,5 +44,6 @@ Face at door ──▶ /apps/admin (Flutter)
 | `VERCEL_TOKEN` | `deploy_server.yml` | Vercel account token |
 | `VERCEL_ORG_ID` | `deploy_server.yml` | from `vercel link` |
 | `VERCEL_PROJECT_ID` | `deploy_server.yml` | from `vercel link` |
+| `SYNC_SIGNING_SECRET` | `build_apks.yml` (admin) | HMAC secret shared with the server; baked into the APK via `--dart-define`. Unset ⇒ APK builds with sync disabled |
 
-Phase 4 adds `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` as **Vercel environment variables** (server-side only, never in Actions or the repo).
+The server also needs **Vercel environment variables** (project settings, never in Actions or the repo): `SYNC_SIGNING_SECRET` (same value), `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`, and optionally `NITROPING_WEBHOOK_URL` + `NITROPING_API_KEY` for the push relay. Until the Turso pair is set, `/api/sync` answers 503 and the admin app keeps queueing offline.
