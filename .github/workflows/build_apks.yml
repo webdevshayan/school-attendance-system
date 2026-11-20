@@ -115,7 +115,19 @@ jobs:
         run: flutter test
 
       - name: Build release APK
-        run: flutter build apk --release
+        env:
+          SYNC_SIGNING_SECRET: ${{ secrets.SYNC_SIGNING_SECRET }}
+        run: |
+          # The HMAC secret is injected at compile time (never committed).
+          # Without it the APK still builds and runs fully offline - sync
+          # stays disabled until a signed build is produced.
+          args=(--release)
+          if [ -n "$SYNC_SIGNING_SECRET" ]; then
+            args+=(--dart-define=SYNC_SIGNING_SECRET="$SYNC_SIGNING_SECRET")
+          else
+            echo "::warning::SYNC_SIGNING_SECRET Actions secret is not set - building with sync disabled"
+          fi
+          flutter build apk "${args[@]}"
 
       # Storage rule: artifacts live for 1 day only, then vanish.
       - name: Upload APK (retention 1 day)

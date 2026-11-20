@@ -24,8 +24,22 @@ class AdminConfig {
       serverBaseUrl != unconfiguredServerUrl;
 
   /// Identifier stamped on every attendance row sent to /api/sync so the
-  /// server (Phase 4 device registration) can tell doors apart.
+  /// server can tell doors apart (device registration allowlist, Phase 4).
   static const String deviceId = 'door-1';
+
+  /// HMAC secret for signed /api/sync + /api/register requests, shared with
+  /// the server's SYNC_SIGNING_SECRET. Injected at compile time via
+  /// --dart-define=SYNC_SIGNING_SECRET=... (CI injects it from the Actions
+  /// secret; it never lives in the repo). Empty on local debug builds, which
+  /// keeps sync disabled - attendance still queues offline either way.
+  static const String syncSigningSecret =
+      String.fromEnvironment('SYNC_SIGNING_SECRET');
+
+  /// True when the app may talk to the server: real base URL AND a signing
+  /// secret. [isServerConfigured] stays URL-based for the banner; [canSync]
+  /// gates the actual network calls.
+  static bool get canSync =>
+      isServerConfigured && syncSigningSecret.isNotEmpty;
 
   /// Cosine-similarity threshold for face matches (face_verification default).
   static const double matchThreshold = 0.70;
