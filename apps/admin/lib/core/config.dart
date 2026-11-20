@@ -6,16 +6,18 @@
 class AdminConfig {
   AdminConfig._();
 
-  /// Placeholder until the Vercel project is linked. While the base URL
-  /// equals this, SyncService skips the network and the UI shows a banner;
-  /// attendance keeps queueing offline either way. Phase 4 makes the server
-  /// persist to Turso. Replace [serverBaseUrl] with the real production
-  /// domain once `vercel link` is done.
+  /// Sentinel for "not yet configured". While [serverBaseUrl] equals this,
+  /// SyncService skips the network and the UI shows a banner; attendance
+  /// keeps queueing offline either way. (The placeholder was the guessed
+  /// domain from Phase 1; the real project turned out to be rgs-*.)
   static const String unconfiguredServerUrl =
       'https://school-attendance-system.vercel.app';
 
-  /// Base URL of the serverless API.
-  static const String serverBaseUrl = unconfiguredServerUrl;
+  /// Base URL of the serverless API - the live Vercel production domain
+  /// (project linked; GET /api/health verified 2026-11-20). Phase 4 makes
+  /// the server persist to Turso.
+  static const String serverBaseUrl =
+      'https://rgs-attendance-system.vercel.app';
 
   /// True once [serverBaseUrl] has been pointed at the real deployment.
   static bool get isServerConfigured =>
