@@ -21,7 +21,7 @@ func TestExecuteSendsTypedStatementsAndReturnsAffectedCounts(t *testing.T) {
 		w.WriteHeader(gotStatus)
 		_, _ = w.Write([]byte(`{"results":[
 			{"type":"ok","response":{"result":{"type":"ok","cols":[],"rows":[],"affected_row_count":1}}},
-			{"type":"ok","response":{"result":{"type":"ok","cols":[{"name":"1"}],"rows":[{"type":"row","row":[{"type":"integer","value":"1"}]}],"affected_row_count":0}}},
+			{"type":"ok","response":{"result":{"type":"ok","cols":[{"name":"id"},{"name":"a"}],"rows":[{"type":"row","row":[{"type":"integer","value":"7"},{"type":"text","value":"abc"}]},{"type":"row","row":[{"type":"integer","value":"9"},{"type":"text","value":"xyz"}]}],"affected_row_count":0}}},
 			{"type":"ok","response":{"result":"close"}}
 		]}`))
 	}))
@@ -30,7 +30,7 @@ func TestExecuteSendsTypedStatementsAndReturnsAffectedCounts(t *testing.T) {
 	c := New(srv.URL, "db-token")
 	got, err := c.Execute(context.Background(),
 		Statement{SQL: "INSERT INTO t (a, b) VALUES (?, ?)", Args: []Arg{Text("abc"), Integer(42)}},
-		Statement{SQL: "SELECT 1 FROM t WHERE a = ?", Args: []Arg{Text("abc")}},
+		Statement{SQL: "SELECT id, a FROM t WHERE a = ?", Args: []Arg{Text("abc")}},
 	)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -41,9 +41,16 @@ func TestExecuteSendsTypedStatementsAndReturnsAffectedCounts(t *testing.T) {
 	if got[0].AffectedRowCount != 1 {
 		t.Errorf("insert affected = %d, want 1", got[0].AffectedRowCount)
 	}
-	// The SELECT reports zero affected rows but one returned row.
-	if got[1].AffectedRowCount != 0 || got[1].RowCount != 1 {
-		t.Errorf("select = %+v, want affected 0 rows 1", got[1])
+	// The SELECT reports zero affected rows and returns two rows whose cell
+	// values (not just counts) must come through.
+	if got[1].AffectedRowCount != 0 || got[1].RowCount != 2 || len(got[1].Rows) != 2 {
+		t.Errorf("select = %+v, want affected 0 rows 2", got[1])
+	}
+	if got[1].Rows[0][0].Type != "integer" || got[1].Rows[0][0].Int() != 7 {
+		t.Errorf("row0 col0 = %+v, want integer 7", got[1].Rows[0][0])
+	}
+	if got[1].Rows[1][1].Type != "text" || got[1].Rows[1][1].Str() != "xyz" {
+		t.Errorf("row1 col1 = %+v, want text xyz", got[1].Rows[1][1])
 	}
 	if gotPath != "/v2/pipeline" {
 		t.Errorf("path = %q, want /v2/pipeline", gotPath)
