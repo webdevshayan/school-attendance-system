@@ -140,6 +140,66 @@ func MintCode(d Deps, w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// revokeCodeRequest is one code-invalidation request from a signed door
+// device (a printed/written code leaked or was handed to the wrong child).
+type revokeCodeRequest struct {
+	Code string `json:"code"`
+}
+
+// RevokeCode deletes a pairing code so it can never pair another device.
+// Already-paired installs keep their bearer tokens - revoke kills only the
+// invitation, not the relationship. Idempotent: revoking an unknown or
+// already-revoked code still answers 200 (the goal is satisfied either way).
+func RevokeCode(d Deps, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed, use POST"})
+		return
+	}
+	if !requireConfig(d, w) {
+		return
+	}
+	if err := d.Store.Init(r.Context()); err != nil {
+		storageDown(w, err)
+		return
+	}
+	body := readBody(w, r)
+	if body == nil {
+		return
+	}
+	if err := authn.Verify(r, body, d.Secret, authn.DefaultMaxSkew); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": err.Error()})
+		return
+	}
+	// Only allowlisted door devices revoke codes.
+	deviceID := r.Header.Get(authn.DeviceHeader)
+	exists, err := d.Store.DeviceExists(r.Context(), deviceID)
+	if err != nil {
+		storageDown(w, err)
+		return
+	}
+	if !exists {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": "unknown device; POST /api/register first"})
+		return
+	}
+	var req revokeCodeRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid json body"})
+		return
+	}
+	if req.Code == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "code is required"})
+		return
+	}
+	if err := d.Store.RevokeCode(r.Context(), req.Code); err != nil {
+		storageDown(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"revoked": req.Code,
+		"note":    "this code can no longer pair any device; already-paired phones keep working",
+	})
+}
+
 // pairRequest is one pairing redemption from a parent install.
 type pairRequest struct {
 	Code     string `json:"code"`
