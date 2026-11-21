@@ -85,26 +85,34 @@ class _EnrollPageState extends State<EnrollPage> {
         final confirmed = await _confirmReplace(existing, id);
         if (!confirmed) return; // finally deletes the shot
       }
+      // Quality gate, non-destructive (review F1): register under a
+      // throwaway id, and only after the sample recognizes itself back does
+      // it get promoted to the real id. A replace therefore overwrites the
+      // old sample LAST - a failed retake can no longer leave an enrolled
+      // student faceless.
+      final tempId = 'tmp_${DateTime.now().microsecondsSinceEpoch}';
+      await widget.face.register(
+        studentId: tempId,
+        imagePath: shotPath,
+        name: name,
+      );
+      final selfMatch = await widget.face.verify(shotPath);
+      if (!EnrollGuard.sampleTrusted(selfMatch, tempId)) {
+        try {
+          await widget.face.forget(tempId);
+        } catch (_) {}
+        _snack('Face sample was too poor to trust - retake in better light. '
+            'Nothing was saved.');
+        return;
+      }
       await widget.face.register(
         studentId: id,
         imagePath: shotPath,
         name: name,
       );
-      // Quality gate: the sample must recognize itself straight back.
-      // Otherwise the door would quietly produce "no match" for the very
-      // student who just enrolled.
-      final selfMatch = await widget.face.verify(shotPath);
-      if (!EnrollGuard.sampleTrusted(selfMatch, id)) {
-        try {
-          await widget.face.forget(id);
-        } catch (_) {}
-        _snack(existing != null
-            ? 'Retake failed the quality check and ${existing.name}\'s old '
-                'sample was already replaced - re-enroll them now.'
-            : 'Face sample was too poor to trust - retake in better light. '
-                'Nothing was saved.');
-        return;
-      }
+      try {
+        await widget.face.forget(tempId);
+      } catch (_) {}
       await widget.store.addStudent(
         Student(id: id, name: name, createdAt: DateTime.now().toUtc()),
       );
