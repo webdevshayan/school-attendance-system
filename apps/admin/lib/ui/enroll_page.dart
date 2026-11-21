@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../core/db/attendance_store.dart';
 import '../core/pairing/code_service.dart';
+import '../core/recognition/enrollment_guard.dart';
 import '../core/recognition/face_service.dart';
 
 /// Registers a student: name (+ optional id) -> camera snap -> on-device
@@ -77,11 +78,41 @@ class _EnrollPageState extends State<EnrollPage> {
       final id = _idController.text.trim().isEmpty
           ? 's_${DateTime.now().millisecondsSinceEpoch}'
           : _idController.text.trim();
+      // Typing an already-enrolled id replaces that student's stored sample
+      // silently - confirm first (decision logic in EnrollGuard).
+      final existing = EnrollGuard.findExisting(_students, id);
+      if (existing != null) {
+        final confirmed = await _confirmReplace(existing, id);
+        if (!confirmed) return; // finally deletes the shot
+      }
+      // Quality gate, non-destructive (review F1): register under a
+      // throwaway id, and only after the sample recognizes itself back does
+      // it get promoted to the real id. A replace therefore overwrites the
+      // old sample LAST - a failed retake can no longer leave an enrolled
+      // student faceless.
+      final tempId = 'tmp_${DateTime.now().microsecondsSinceEpoch}';
+      await widget.face.register(
+        studentId: tempId,
+        imagePath: shotPath,
+        name: name,
+      );
+      final selfMatch = await widget.face.verify(shotPath);
+      if (!EnrollGuard.sampleTrusted(selfMatch, tempId)) {
+        try {
+          await widget.face.forget(tempId);
+        } catch (_) {}
+        _snack('Face sample was too poor to trust - retake in better light. '
+            'Nothing was saved.');
+        return;
+      }
       await widget.face.register(
         studentId: id,
         imagePath: shotPath,
         name: name,
       );
+      try {
+        await widget.face.forget(tempId);
+      } catch (_) {}
       await widget.store.addStudent(
         Student(id: id, name: name, createdAt: DateTime.now().toUtc()),
       );
@@ -104,6 +135,31 @@ class _EnrollPageState extends State<EnrollPage> {
       }
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// Asks the operator before overwriting an existing student's face sample.
+  Future<bool> _confirmReplace(Student existing, String id) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Replace face sample?'),
+        content: Text(
+          '${existing.name} ($id) is already enrolled. Capturing again '
+          'replaces their stored face sample (attendance history is kept).',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Replace'),
+          ),
+        ],
+      ),
+    );
+    return confirmed == true;
   }
 
   Future<void> _remove(Student student) async {

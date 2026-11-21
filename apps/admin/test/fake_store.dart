@@ -79,6 +79,19 @@ class FakeStore implements AttendanceStore {
     );
   }
 
+  @override
+  Future<List<AttendanceRecord>> attendanceBetween(
+    DateTime startUtc,
+    DateTime endUtc,
+  ) async =>
+      rows
+          .where(
+            (r) =>
+                !r.markedAt.isBefore(startUtc) && r.markedAt.isBefore(endUtc),
+          )
+          .toList()
+        ..sort((a, b) => b.markedAt.compareTo(a.markedAt));
+
   AttendanceRecord _withSynced(AttendanceRecord record, bool synced) =>
       AttendanceRecord(
         id: record.id,
