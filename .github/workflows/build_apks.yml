@@ -5,6 +5,11 @@ on:
     paths:
       - "apps/**"
       - ".github/workflows/build_apks.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - ".github/workflows/build_apks.yml"
   workflow_dispatch:
 
 concurrency:
@@ -129,12 +134,17 @@ jobs:
           fi
           flutter build apk "${args[@]}"
 
-      # Storage rule: artifacts live for 1 day only, then vanish.
+      # Storage rule: artifacts live for 1 day only, then vanish. The copy
+      # renames the APK because both jobs produce app-release.apk - distinct
+      # names let the release job merge-multiple-download without collision.
+      - name: Stage APK for upload
+        run: cp build/app/outputs/flutter-apk/app-release.apk admin-app.apk
+
       - name: Upload APK (retention 1 day)
         uses: actions/upload-artifact@v4
         with:
           name: admin-app-apk
-          path: apps/admin/build/app/outputs/flutter-apk/app-release.apk
+          path: apps/admin/admin-app.apk
           if-no-files-found: error
           retention-days: 1
 
@@ -174,11 +184,14 @@ jobs:
       - name: Build release APK
         run: flutter build apk --release
 
+      - name: Stage APK for upload
+        run: cp build/app/outputs/flutter-apk/app-release.apk parent-app.apk
+
       - name: Upload APK (retention 1 day)
         uses: actions/upload-artifact@v4
         with:
           name: parent-app-apk
-          path: apps/parent/build/app/outputs/flutter-apk/app-release.apk
+          path: apps/parent/parent-app.apk
           if-no-files-found: error
           retention-days: 1
 
@@ -208,3 +221,55 @@ jobs:
               gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/$id"
             done
           fi
+
+  # Persistent deliverable: every change that reaches main produces a GitHub
+  # Release carrying both APKs. Release assets never expire - the 1-day
+  # artifacts above stay a PR-review convenience only. PR runs never release;
+  # manual dispatches release only when run on main.
+  release_apks:
+    name: Release APKs (GitHub Release)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [build_admin, build_parent]
+    if: >-
+      always() &&
+      needs.build_admin.result == 'success' &&
+      needs.build_parent.result == 'success' &&
+      github.event_name != 'pull_request' &&
+      github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download the built APKs
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: "*-app-apk"
+          merge-multiple: true
+
+      - name: Create the release with both APKs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="apk-$(date -u +%Y%m%d)-run${{ github.run_number }}"
+          SUBJECT=$(git log -1 --pretty=%s)
+          {
+            echo "Release APKs built from commit \`${GITHUB_SHA::7}\`."
+            echo
+            echo "- **admin-app.apk** - door-side app: face recognition, offline attendance queue, pairing-code minting. Built with the signing secret (sync enabled)."
+            echo "- **parent-app.apk** - guardian app: code pairing + live attendance feed."
+            echo
+            echo "Change: $SUBJECT"
+            echo
+            echo "Built by [run ${{ github.run_number }}](${{ github.server_url }}/${GITHUB_REPOSITORY}/actions/runs/${{ github.run_id }}) on $(date -u '+%Y-%m-%d %H:%M UTC')."
+          } > notes.md
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "APKs - $(date -u '+%Y-%m-%d') (run ${{ github.run_number }})" \
+            --notes-file notes.md \
+            dist/admin-app.apk dist/parent-app.apk
+          echo "Release $TAG created with both APKs"
