@@ -8,7 +8,7 @@ Serverless API deployed to Vercel. Phase 4 is live: signed requests, device allo
 | `/api/register` | POST | Adds a signed device to the sync allowlist (idempotent upsert) |
 | `/api/sync` | POST | Validates, de-duplicates and persists one attendance row; fans out a push |
 | `/api/codes` | POST | Mints a parent-pairing code for a student (signed, registered door devices only) |
-| `/api/pair` | POST | Redeems a code: binds a parent install to the student, returns its bearer token once |
+| `/api/pair` | POST | Redeems a code: binds a parent install to the student, returns its bearer token once. Rate-limited per client IP (default 10/min, `PAIR_RATE_LIMIT`; `429` + `Retry-After` when exceeded) |
 | `/api/events` | GET | Cursor feed of a paired student's attendance rows (Bearer token; 100 rows max) |
 
 ## Pairing & guardian registry (Phase 5)
@@ -16,6 +16,7 @@ Serverless API deployed to Vercel. Phase 4 is live: signed requests, device allo
 - **Minting**: a registered door device HMAC-signs `{student_id}` to `POST /api/codes`; the server answers `{code, student_id, expires_at}` (8 chars, lookalike-free alphabet, 7-day TTL, multi-use so both guardians pair from one code).
 - **Redemption**: the parent app posts `{code, label, platform}` to `POST /api/pair` — the code itself is the credential. Unknown → `400`; expired → `410`. Success returns `{student_id, token}` **exactly once**; the server stores only the token's SHA-256 (`parent_devices.token_hash`).
 - **Feed**: `GET /api/events?since=<id>` with `Authorization: Bearer <token>` returns the paired student's rows oldest-first with a `cursor`; payloads reuse the `/api/sync` wire shape (`device_id`, `student_id`, `status`, `marked_at`), so the parent app's `PushHandler` consumes them unchanged. Rows for other students never cross the boundary.
+- **Abuse resistance**: `/api/pair` is rate-limited per client IP (default 10 attempts/min; `PAIR_RATE_LIMIT` tunes or disables it; breaches answer `429` + `Retry-After`). The limiter is an in-memory fixed window per serverless instance — no cross-instance state exists on this runtime — so it makes grinding slow and observable; the code's entropy and 7-day TTL remain the real bound.
 - This is the delivery channel that works today; when the Nitroping relay credentials land, the same `parent_devices` registry drives real push fan-out.
 
 
@@ -44,6 +45,7 @@ X-Sync-Signature: <hex HMAC-SHA256(secret, deviceId \n timestamp \n body)>
 | `TURSO_AUTH_TOKEN` | yes | libSQL auth token |
 | `NITROPING_WEBHOOK_URL` | optional | Push relay endpoint; fan-out is skipped when unset |
 | `NITROPING_API_KEY` | optional | Push relay bearer token |
+| `PAIR_RATE_LIMIT` | optional | `/api/pair` attempts per client IP per minute (default `10`, `0` disables the limiter) |
 
 ## Layout & the Vercel Go runtime contract
 
