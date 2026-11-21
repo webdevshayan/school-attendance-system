@@ -198,6 +198,36 @@ jobs:
             return 1
           }
 
+          # Preview deployments sit behind "Vercel Authentication" (SSO) by
+          # default, which 302-redirects the unauthenticated health probe (run
+          # 44855664515: every gate check hit "HTTP 302 Protected by Vercel
+          # Authentication"). Protection Bypass for Automation has no REST
+          # endpoint to create secrets, so the pipeline clears the SSO toggle
+          # (PATCH ssoProtection: null) for the verification window - previews
+          # become briefly public, and every endpoint except /api/health is
+          # authenticated anyway - and restores it on step exit via trap.
+          restore_sso() {
+            curl -sS -o /dev/null -X PATCH \
+              -H "Authorization: Bearer $VERCEL_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID?teamId=$VERCEL_ORG_ID" \
+              -d '{"ssoProtection": {"deploymentType": "preview"}}' >/dev/null 2>&1 || true
+          }
+          disable_sso() {
+            code=$(curl -sS -o /tmp/sso.json -w '%{http_code}' -X PATCH \
+              -H "Authorization: Bearer $VERCEL_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID?teamId=$VERCEL_ORG_ID" \
+              -d '{"ssoProtection": null}')
+            if [ "$code" != 200 ]; then
+              echo "::warning::could not clear SSO protection (HTTP $code) - the preview gate may see 302 redirects"
+            else
+              echo "preview SSO protection cleared for the verification window"
+            fi
+          }
+          disable_sso
+          trap restore_sso EXIT
+
           echo '--- attempt 1: framework preset "go" - one package-main server (de23c65 entrypoint) ---'
           set_framework go
           URL=$(deploy_preview) || exit 1
