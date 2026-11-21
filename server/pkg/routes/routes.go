@@ -39,6 +39,7 @@ func New() *http.ServeMux {
 	mount("/api/register", handlers.Register)
 	mount("/api/sync", handlers.Sync)
 	mount("/api/codes", handlers.MintCode)
+	mount("/api/codes/revoke", handlers.RevokeCode)
 	pairLimiter := pairLimiterFromEnv(os.Getenv("PAIR_RATE_LIMIT"))
 	mux.HandleFunc("/api/pair", func(w http.ResponseWriter, r *http.Request) {
 		if pairLimiter != nil {

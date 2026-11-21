@@ -10,6 +10,7 @@ import '../core/pairing/code_service.dart';
 import '../core/recognition/enroll_errors.dart';
 import '../core/recognition/enrollment_guard.dart';
 import '../core/recognition/face_service.dart';
+import '../core/roster/roster_search.dart';
 
 /// Registers a student: name (+ optional id) -> camera snap -> on-device
 /// face sample + local database row. Each student row also mints a parent
@@ -40,8 +41,16 @@ class EnrollPage extends StatefulWidget {
 class _EnrollPageState extends State<EnrollPage> {
   final _nameController = TextEditingController();
   final _idController = TextEditingController();
+  final _searchController = TextEditingController();
   bool _busy = false;
   List<Student> _students = const [];
+
+  /// The visible roster: the search query filters the in-memory list, so
+  /// a school with hundreds of students can still find anyone instantly.
+  List<Student> get _filtered => RosterSearch.filter(
+        _students,
+        _searchController.text,
+      );
 
   @override
   void initState() {
@@ -53,6 +62,7 @@ class _EnrollPageState extends State<EnrollPage> {
   void dispose() {
     _nameController.dispose();
     _idController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -359,6 +369,16 @@ class _EnrollPageState extends State<EnrollPage> {
                   'parents can pair with it until '
                   '${info.expiresAt.toLocal().toString().split(' ').first}.',
                 ),
+                const SizedBox(height: 4),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    icon: const Icon(Icons.delete_forever, size: 18),
+                    label: const Text('Revoke this code'),
+                    onPressed: () =>
+                        unawaited(_revokePairingCode(dialogContext, info)),
+                  ),
+                ),
               ],
             );
           },
@@ -369,6 +389,51 @@ class _EnrollPageState extends State<EnrollPage> {
             child: const Text('Done'),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Revokes the pairing code the operator is looking at, after a warning.
+  /// Only the INVITATION dies (new pairings are refused); phones already
+  /// paired keep their access. The dialog closes so the shown code can no
+  /// longer be mistaken for a working one.
+  Future<void> _revokePairingCode(
+    BuildContext dialogContext,
+    PairingCodeInfo info,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (confirmContext) => AlertDialog(
+        title: const Text('Revoke this code?'),
+        content: Text(
+          'Guardians who still have this code can no longer pair with it. '
+          'Phones that ALREADY paired keep working. This cannot be undone - '
+          'mint a fresh code if you need a new invitation.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(confirmContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(confirmContext).pop(true),
+            child: const Text('Revoke'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final service = widget.codeService ?? CodeService();
+    final ok = await service.revoke(info.code);
+    if (!mounted) return;
+    Navigator.of(dialogContext).pop();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ok
+              ? 'Code revoked - it can no longer pair anyone'
+              : 'Could not revoke right now - check connectivity and try again',
+        ),
       ),
     );
   }
@@ -411,9 +476,24 @@ class _EnrollPageState extends State<EnrollPage> {
             onPressed: _busy ? null : _enroll,
           ),
           const SizedBox(height: 24),
-          Text('Enrolled (${_students.length})',
-              style: Theme.of(context).textTheme.titleMedium),
-          ..._students.map(
+          TextField(
+            controller: _searchController,
+            onChanged: (_) => setState(() {}),
+            decoration: const InputDecoration(
+              prefixIcon: Icon(Icons.search),
+              hintText: 'Find an enrolled student by name',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Builder(builder: (context) {
+            final filtered = _filtered;
+            final count = filtered.length == _students.length
+                ? 'Enrolled (${_students.length})'
+                : 'Showing ${filtered.length} of ${_students.length}';
+            return Text(count, style: Theme.of(context).textTheme.titleMedium);
+          }),
+          ..._filtered.map(
             (student) => ListTile(
               leading: const Icon(Icons.face),
               title: Text(student.name),
@@ -440,6 +520,13 @@ class _EnrollPageState extends State<EnrollPage> {
             const Padding(
               padding: EdgeInsets.all(8),
               child: Text('Nobody enrolled yet. Capture a face to start.'),
+            )
+          else if (_filtered.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text(
+                'No enrolled student matches "${_searchController.text.trim()}".',
+              ),
             ),
         ],
       ),

@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -272,5 +273,119 @@ func TestPairAndEventsRequireStore(t *testing.T) {
 	}
 	if w := eventsReq(t, d, "tok", ""); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("events without store = %d, want 503", w.Code)
+	}
+}
+
+// revokeCodeReq posts a signed code-invalidation, exactly the way the admin
+// app will send it.
+func revokeCodeReq(t *testing.T, d Deps, deviceID, body, secret string) *httptest.ResponseRecorder {
+	t.Helper()
+	w, r := signed(t, "/api/codes/revoke", deviceID, body, secret)
+	RevokeCode(d, w, r)
+	return w
+}
+
+func mintOneCode(t *testing.T, d Deps) string {
+	t.Helper()
+	w := mintCodeReq(t, d, "door-1", `{"student_id":"s1"}`, testSecret)
+	if w.Code != http.StatusOK {
+		t.Fatalf("mint = %d (%s)", w.Code, w.Body.String())
+	}
+	var m map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &m); err != nil {
+		t.Fatal(err)
+	}
+	code, _ := m["code"].(string)
+	if code == "" {
+		t.Fatal("mint returned no code")
+	}
+	return code
+}
+
+func TestRevokeCodeKillsTheInvitation(t *testing.T) {
+	st := newFakeStore()
+	d := fullDeps(st)
+	if err := st.UpsertDevice(context.Background(), store.Device{DeviceID: "door-1"}); err != nil {
+		t.Fatal(err)
+	}
+	code := mintOneCode(t, d)
+
+	// Precondition: the code pairs right now.
+	if w := pairReq(t, d, fmt.Sprintf(`{"code":%q,"label":"moms phone","platform":"android"}`, code)); w.Code != http.StatusOK {
+		t.Fatalf("pair before revoke = %d (%s)", w.Code, w.Body.String())
+	}
+	// Mint again (the first redemption consumed nothing - codes are
+	// multi-use) and revoke it.
+	code = mintOneCode(t, d)
+	if w := revokeCodeReq(t, d, "door-1", fmt.Sprintf(`{"code":%q}`, code), testSecret); w.Code != http.StatusOK {
+		t.Fatalf("revoke = %d (%s)", w.Code, w.Body.String())
+	}
+	// Only the revoked code is gone; the first mint's invitation is
+	// untouched (revoke kills one invitation, not the student's others).
+	if len(st.codes) != 1 {
+		t.Errorf("codes after revoke = %d, want 1 (the earlier mint survives)", len(st.codes))
+	}
+	if w := pairReq(t, d, fmt.Sprintf(`{"code":%q}`, code)); w.Code != http.StatusBadRequest {
+		t.Fatalf("pair after revoke = %d, want 400 unknown code", w.Code)
+	}
+}
+
+func TestRevokeCodeIsIdempotent(t *testing.T) {
+	st := newFakeStore()
+	d := fullDeps(st)
+	if err := st.UpsertDevice(context.Background(), store.Device{DeviceID: "door-1"}); err != nil {
+		t.Fatal(err)
+	}
+	code := mintOneCode(t, d)
+	for i := 0; i < 2; i++ {
+		if w := revokeCodeReq(t, d, "door-1", fmt.Sprintf(`{"code":%q}`, code), testSecret); w.Code != http.StatusOK {
+			t.Fatalf("revoke #%d = %d, want 200 (idempotent)", i+1, w.Code)
+		}
+	}
+	// Revoking something that never existed is equally fine.
+	if w := revokeCodeReq(t, d, "door-1", `{"code":"ZZZZ9999"}`, testSecret); w.Code != http.StatusOK {
+		t.Fatalf("revoke unknown = %d, want 200", w.Code)
+	}
+}
+
+func TestRevokeCodeRequiresSignedRegisteredDevice(t *testing.T) {
+	st := newFakeStore()
+	d := fullDeps(st)
+	if err := st.UpsertDevice(context.Background(), store.Device{DeviceID: "door-1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// No signature at all.
+	if w := revokeCodeReq(t, d, "door-1", `{"code":"ABCD2345"}`, ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("unsigned revoke = %d, want 401", w.Code)
+	}
+	// Signed with the wrong secret.
+	if w := revokeCodeReq(t, d, "door-1", `{"code":"ABCD2345"}`, "wrong-secret"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("bad-signature revoke = %d, want 401", w.Code)
+	}
+	// Valid signature, unregistered device.
+	if w := revokeCodeReq(t, d, "stranger", `{"code":"ABCD2345"}`, testSecret); w.Code != http.StatusForbidden {
+		t.Fatalf("stranger revoke = %d, want 403", w.Code)
+	}
+	// Valid signature, wrong method.
+	w, r := signed(t, "/api/codes/revoke", "door-1", `{"code":"ABCD2345"}`, testSecret)
+	r.Method = http.MethodGet
+	RevokeCode(d, w, r)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET revoke = %d, want 405", w.Code)
+	}
+}
+
+func TestRevokeCodeRejectsEmptyAndInvalidBodies(t *testing.T) {
+	st := newFakeStore()
+	d := fullDeps(st)
+	if err := st.UpsertDevice(context.Background(), store.Device{DeviceID: "door-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if w := revokeCodeReq(t, d, "door-1", `{"code":""}`, testSecret); w.Code != http.StatusBadRequest {
+		t.Fatalf("empty code = %d, want 400", w.Code)
+	}
+	if w := revokeCodeReq(t, d, "door-1", `{"student_id":"s1"}`, testSecret); w.Code != http.StatusBadRequest {
+		t.Fatalf("missing code field = %d, want 400", w.Code)
 	}
 }

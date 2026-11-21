@@ -74,6 +74,11 @@ func (f *fakeStore) FindCode(_ context.Context, code string) (store.PairingCode,
 	return c, ok, nil
 }
 
+func (f *fakeStore) RevokeCode(_ context.Context, code string) error {
+	delete(f.codes, code)
+	return nil
+}
+
 func (f *fakeStore) UpsertParentDevice(_ context.Context, d store.ParentDevice) error {
 	f.parents[d.TokenHash] = d.StudentID
 	return nil

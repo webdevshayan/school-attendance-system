@@ -60,6 +60,9 @@ type Store interface {
 	MintCode(ctx context.Context, c PairingCode) error
 	// FindCode returns a minted code record (ok=false when unknown).
 	FindCode(ctx context.Context, code string) (PairingCode, bool, error)
+	// RevokeCode deletes a pairing code, so it can no longer pair anyone.
+	// Deleting an unknown code is a no-op (idempotent revoke).
+	RevokeCode(ctx context.Context, code string) error
 	// UpsertParentDevice registers or refreshes a paired parent install.
 	UpsertParentDevice(ctx context.Context, d ParentDevice) error
 	// StudentForToken resolves a parent bearer token (by hash) to the
@@ -106,6 +109,17 @@ func (s *TursoStore) FindCode(ctx context.Context, code string) (PairingCode, bo
 		CreatedAt: rows[0][1].Str(),
 		ExpiresAt: rows[0][2].Str(),
 	}, true, nil
+}
+
+// RevokeCode deletes a pairing code. Idempotent by design: the goal is
+// "this code must stop working", which deleting an unknown row already
+// satisfies - callers get no "not found" error to branch on.
+func (s *TursoStore) RevokeCode(ctx context.Context, code string) error {
+	_, err := s.c.Execute(ctx, turso.Statement{
+		SQL:  `DELETE FROM pairing_codes WHERE code = ?`,
+		Args: []turso.Arg{turso.Text(code)},
+	})
+	return err
 }
 
 // UpsertParentDevice registers a paired install or refreshes its binding.

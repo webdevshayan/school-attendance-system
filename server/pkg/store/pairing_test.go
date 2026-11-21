@@ -106,3 +106,27 @@ func TestEventsSinceEmptyResult(t *testing.T) {
 
 // The fixed clock helper mirrors store_test.go's for pairing expiry tests.
 func fixedNow() time.Time { return time.Date(2026, 11, 20, 14, 0, 0, 0, time.UTC) }
+
+func TestRevokeCodeDeletesByCode(t *testing.T) {
+	s, f := newTestStore(t, affectedResult(1))
+	if err := s.RevokeCode(context.Background(), "ABCD2345"); err != nil {
+		t.Fatalf("RevokeCode: %v", err)
+	}
+	if !strings.Contains(f.gotSQLs[0], "DELETE FROM pairing_codes") {
+		t.Errorf("revoke SQL is not a delete: %.80s", f.gotSQLs[0])
+	}
+	if !strings.Contains(f.gotSQLs[0], "WHERE code = ?") {
+		t.Errorf("revoke SQL must target exactly one code: %.80s", f.gotSQLs[0])
+	}
+	if f.gotArgs[0][0] != "ABCD2345" {
+		t.Errorf("revoke arg = %v, want ABCD2345", f.gotArgs[0][0])
+	}
+}
+
+func TestRevokeCodeIsIdempotentOnUnknownCode(t *testing.T) {
+	// Zero affected rows, no error: the delete simply matched nothing.
+	s, _ := newTestStore(t, affectedResult(0))
+	if err := s.RevokeCode(context.Background(), "ZZZZ9999"); err != nil {
+		t.Fatalf("RevokeCode on unknown code: %v", err)
+	}
+}
