@@ -36,7 +36,7 @@ jobs:
       - name: gofmt (fail on unformatted files)
         working-directory: server
         run: |
-          unformatted=$(gofmt -l api cmd pkg index.go main.go smoke)
+          unformatted=$(gofmt -l api pkg main.go smoke)
           if [ -n "$unformatted" ]; then
             echo "::error::Unformatted Go files: $unformatted"
             exit 1
@@ -51,7 +51,7 @@ jobs:
   deploy:
     name: Vercel production deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     if: github.event_name != 'pull_request'
     steps:
       - uses: actions/checkout@v4
@@ -64,9 +64,10 @@ jobs:
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          SYNC_SIGNING_SECRET: ${{ secrets.SYNC_SIGNING_SECRET }}
         run: |
           missing=0
-          for v in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID TURSO_DATABASE_URL TURSO_AUTH_TOKEN; do
+          for v in VERCEL_TOKEN VERCEL_ORG_ID VERCEL_PROJECT_ID TURSO_DATABASE_URL TURSO_AUTH_TOKEN SYNC_SIGNING_SECRET; do
             if [ -z "${!v}" ]; then
               echo "::error::Missing repo secret '$v' - add it under Settings > Secrets and variables > Actions"
               missing=1
@@ -78,45 +79,14 @@ jobs:
         with:
           node-version: "20"
 
-      # INCIDENT 2026-11-20 (PR #6): the "Go" framework preset (slug "go")
-      # BUILDS index.go successfully with @vercel/go, but the resulting
-      # catch-all function fails at invocation (FUNCTION_INVOCATION_FAILED on
-      # every route) for this root-package layout, taking production down.
-      # Until that is root-caused (needs the function's runtime logs), the
-      # preset stays "Other": the per-file api/*.go module mode that has been
-      # serving production since Phase 2. index.go/main.go/cmd/server stay in
-      # the tree for the retry. The deploy step verifies health after every
-      # deploy so a runtime-broken build can never silently go live again.
-      - name: Ensure framework preset is Other (self-heal, post-incident)
-        working-directory: server
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        run: |
-          patch_project() {
-            curl -sS -o /tmp/vercel_project.json -w '%{http_code}' -X PATCH \
-              -H "Authorization: Bearer $VERCEL_TOKEN" \
-              -H "Content-Type: application/json" \
-              "$1" -d '{"framework": null}'
-          }
-          code=$(patch_project "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID?teamId=$VERCEL_ORG_ID")
-          if [ "$code" != 200 ]; then
-            echo "teamId attempt -> HTTP $code, retrying without team scope"
-            code=$(patch_project "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID")
-          fi
-          if [ "$code" = 200 ]; then
-            echo "Framework preset ensured (Go)."
-          else
-            echo "::error::Could not set the framework preset to Go (HTTP $code). Flip it manually: Vercel dashboard -> rgs-attendance-system -> Settings -> Build & Output Settings -> Framework Preset -> Go, then re-run this workflow."
-            exit 1
-          fi
-
       # The runtime env lives on the Vercel project, not in Actions - so the
-      # credentials kept in repo secrets are pushed into Vercel (production)
-      # before every deploy. Rotating a secret here propagates on the next
-      # run; the values are passed via flags/env, never printed.
-      - name: Bridge Turso credentials into Vercel (production)
+      # credentials kept in repo secrets are pushed into Vercel before every
+      # deploy, for BOTH the production and preview targets: the preview
+      # verification below then runs with the same credentials production
+      # will get (full-fidelity gate, not a degraded one). Rotating a secret
+      # here propagates on the next run; values are passed via flags, never
+      # printed.
+      - name: Bridge credentials into Vercel (production + preview)
         working-directory: server
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -124,54 +94,134 @@ jobs:
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          SYNC_SIGNING_SECRET: ${{ secrets.SYNC_SIGNING_SECRET }}
           NITROPING_WEBHOOK_URL: ${{ secrets.NITROPING_WEBHOOK_URL }}
           NITROPING_API_KEY: ${{ secrets.NITROPING_API_KEY }}
         run: |
           sync_env() {
             name="$1"; val="$2"; required="$3"
-            if [ -z "$val" ]; then
-              if [ "$required" = "required" ]; then
-                echo "::error::Missing repo secret '$name' - add it under Settings > Secrets and variables > Actions"
-                missing=1
-              else
-                echo "optional $name not set in Actions secrets - skipping (push fan-out stays disabled)"
+            for target in production preview; do
+              if [ -z "$val" ]; then
+                if [ "$required" = "required" ]; then
+                  echo "::error::Missing repo secret '$name' - add it under Settings > Secrets and variables > Actions"
+                  missing=1
+                else
+                  echo "optional $name not set in Actions secrets - skipping ($target; push fan-out stays disabled)"
+                fi
+                continue
               fi
-              return
-            fi
-            # Replace the production value so rotations propagate. A var that
-            # does not exist yet (or a prompting CLI) is handled by || true.
-            printf 'y\n' | npx --yes vercel@latest env rm "$name" production --yes >/dev/null 2>&1 || true
-            npx --yes vercel@latest env add "$name" production --value "$val" >/dev/null
-            echo "synced $name -> Vercel (production)"
+              printf 'y\n' | npx --yes vercel@latest env rm "$name" "$target" --yes >/dev/null 2>&1 || true
+              npx --yes vercel@latest env add "$name" "$target" --value "$val" >/dev/null
+              echo "synced $name -> Vercel ($target)"
+            done
           }
           missing=0
           sync_env TURSO_DATABASE_URL "$TURSO_DATABASE_URL" required
           sync_env TURSO_AUTH_TOKEN "$TURSO_AUTH_TOKEN" required
+          sync_env SYNC_SIGNING_SECRET "$SYNC_SIGNING_SECRET" required
           sync_env NITROPING_WEBHOOK_URL "$NITROPING_WEBHOOK_URL" optional
           sync_env NITROPING_API_KEY "$NITROPING_API_KEY" optional
           exit $missing
 
-      # Remote build (no pull/build/--prebuilt): Vercel compiles the Go
-      # runtime on its own infra. After the swap, verify the deployment is
-      # actually SERVABLE (PR #6 lesson: a build can succeed and still crash
-      # at invocation - health verification is what catches that).
-      - name: Deploy server/ to Vercel (production, remote build)
+      # INCIDENT CLASS CLOSED 2026-11-21. Three production failures shared one
+      # root cause: production was swapped BEFORE anyone knew the build could
+      # actually run.
+      #   - "No Go entrypoint found"     (preset "Go", no main.go in the tree)
+      #   - FUNCTION_INVOCATION_FAILED   (preset "Go", package-handler main.go)
+      #   - "fork/exec ./user-server:    (preset "Go", package-handler main.go,
+      #     exec format error"            dashboard redeploy)
+      # The entrypoint is now a real package-main server on PORT (de23c65, per
+      # docs/functions/runtimes/go), and this pipeline is VERIFY-THEN-PROMOTE:
+      # every deployment is built on a preview URL first, verified against
+      # /api/health with the real credentials, and only a VERIFIED deployment
+      # is promoted to production. An unverifiable Go-framework build
+      # automatically falls back to preset "Other" (api/*.go) - still
+      # verify-then-promote. Production is never touched by an unverified
+      # build; if production were ever unhealthy after a promote, the job
+      # rolls back to the previous production deployment and fails loudly.
+      - name: Deploy, verify on preview, promote (zero-downtime)
         working-directory: server
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
-          npx --yes vercel@latest deploy --prod || { echo "::error::Vercel deploy failed"; exit 1; }
-          echo "Deploy accepted. Verifying production health..."
-          for attempt in 1 2 3 4 5 6; do
-            code=$(curl -sS --max-time 15 -o /tmp/health.json -w '%{http_code}' "https://rgs-attendance-system.vercel.app/api/health" || echo 000)
-            if [ "$code" = "200" ] && grep -q '"status":"ok"' /tmp/health.json 2>/dev/null; then
-              echo "Production healthy (attempt $attempt): $(cat /tmp/health.json)"
-              exit 0
+          PROD_URL="https://rgs-attendance-system.vercel.app"
+
+          set_framework() {
+            if [ "$1" = "go" ]; then body='{"framework": "go"}'; else body='{"framework": null}'; fi
+            code=$(curl -sS -o /tmp/vercel_project.json -w '%{http_code}' -X PATCH \
+              -H "Authorization: Bearer $VERCEL_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID?teamId=$VERCEL_ORG_ID" \
+              -d "$body")
+            if [ "$code" != 200 ]; then
+              code=$(curl -sS -o /tmp/vercel_project.json -w '%{http_code}' -X PATCH \
+                -H "Authorization: Bearer $VERCEL_TOKEN" \
+                -H "Content-Type: application/json" \
+                "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID" \
+                -d "$body")
             fi
-            echo "health check $attempt -> HTTP $code $(cat /tmp/health.json 2>/dev/null); retrying in 15 s"
-            sleep 15
-          done
-          echo "::error::Production is not healthy after the deploy - see the function logs in the Vercel dashboard"
-          exit 1
+            if [ "$code" != 200 ]; then
+              echo "::error::Could not set the framework preset (HTTP $code)"
+              exit 1
+            fi
+            echo "framework preset set: $1"
+          }
+
+          deploy_preview() {
+            if ! npx --yes vercel@latest deploy >/tmp/deploy.log 2>&1; then
+              echo "::error::vercel deploy failed - last lines:" >&2
+              tail -20 /tmp/deploy.log >&2
+              return 1
+            fi
+            tail -6 /tmp/deploy.log >&2
+            url=$(grep -Eo 'https://[A-Za-z0-9.-]+\.vercel\.app' /tmp/deploy.log | grep -v 'rgs-attendance-system\.vercel\.app' | tail -1)
+            if [ -z "$url" ]; then
+              echo "::error::could not parse the preview deployment URL from the deploy output" >&2
+              return 1
+            fi
+            echo "$url"
+          }
+
+          check_health() {
+            base="$1"
+            for attempt in 1 2 3 4 5 6; do
+              code=$(curl -sS --max-time 15 -o /tmp/health.json -w '%{http_code}' "$base/api/health" || echo 000)
+              if [ "$code" = 200 ] && grep -q '"status":"ok"' /tmp/health.json && grep -q '"turso":"configured"' /tmp/health.json; then
+                echo "healthy (attempt $attempt): $(cat /tmp/health.json)"
+                return 0
+              fi
+              echo "health check $attempt -> HTTP $code $(cat /tmp/health.json 2>/dev/null); retrying in 15 s"
+              sleep 15
+            done
+            return 1
+          }
+
+          echo '--- attempt 1: framework preset "go" - one package-main server (de23c65 entrypoint) ---'
+          set_framework go
+          URL=$(deploy_preview) || exit 1
+          if ! check_health "$URL"; then
+            echo "::warning::Go-framework build failed verification - falling back to preset Other (api/*.go per-file functions)"
+            echo '--- attempt 2: framework preset "Other" - proven serverless shape ---'
+            set_framework null
+            URL=$(deploy_preview) || exit 1
+            if ! check_health "$URL"; then
+              echo "::error::even the fallback failed verification - production left untouched"
+              exit 1
+            fi
+          fi
+
+          echo "verified on preview: $URL - promoting to production"
+          if ! npx --yes vercel@latest promote "$URL" --yes; then
+            echo "::error::promote failed - production keeps running the previous deployment"
+            exit 1
+          fi
+
+          if ! check_health "$PROD_URL"; then
+            echo "::warning::production health failed after promote - rolling back"
+            npx --yes vercel@latest rollback --yes || echo "::warning::automatic rollback failed - roll back in the Vercel dashboard (Deployments -> previous production -> Promote/Rollback)"
+            echo "::error::production was not healthy after promote - rolled back"
+            exit 1
+          fi
+          echo "PRODUCTION LIVE AND HEALTHY - promoted $URL"
