@@ -21,4 +21,24 @@ class EnrollGuard {
     }
     return null;
   }
+
+  /// Who the enrollment attaches to after the identify pass discovered the
+  /// captured face is already enrolled. `adopt` = replace the matched
+  /// student's sample: the enrollment keeps THEIR id (the door keeps
+  /// recognizing the same human) but takes the freshly typed name, so name
+  /// corrections ride along for free. `!adopt` = the operator insists this
+  /// is a different student and the capture enrolls under the typed id.
+  ///
+  /// Ids are internal machine keys - the flow is name-first and the face
+  /// itself is the lookup key, so a school with hundreds of students never
+  /// needs to distribute or type ids.
+  static ({String id, String name}) resolveDuplicate({
+    required Student matched,
+    required String typedId,
+    required String typedName,
+    required bool adopt,
+  }) =>
+      adopt
+          ? (id: matched.id, name: typedName)
+          : (id: typedId, name: typedName);
 }

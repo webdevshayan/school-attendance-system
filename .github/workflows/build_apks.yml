@@ -81,6 +81,21 @@ jobs:
               with open(props, 'a') as f:
                   f.write('\nkotlin.jvm.target.validation.mode=warning\n')
               print('gradle.properties: jvm target validation -> warning')
+          if 'shrink=false' not in g:
+              # INCIDENT 2026-11-21 (door device): every face capture threw
+              # "PlatformException ... Object.getClass() on a null object
+              # reference" - deterministically, in the release APK only.
+              # Since Flutter 3.44+ the Flutter Gradle plugin turns R8
+              # minification ON for release builds by default
+              # (FlutterPlugin.kt: shouldShrinkResources() defaults to true),
+              # and ML Kit's internals do not survive it: the shipped APK's
+              # classes.dex carried the r8-map-id and Laa0;-style renamed
+              # classes, and the stripped ML Kit codegen NPE'd on every
+              # detection. `shrink=false` is the plugin's official opt-out;
+              # the size win on a ~227 MB APK is marginal anyway.
+              with open(props, 'a') as f:
+                  f.write('\nshrink=false\n')
+              print('gradle.properties: shrink=false (release builds stay unminified)')
           root = 'android/build.gradle.kts'
           r = open(root).read()
           if 'lint tasks disabled repo-wide' not in r:

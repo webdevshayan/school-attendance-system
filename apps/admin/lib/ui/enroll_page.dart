@@ -73,14 +73,15 @@ class _EnrollPageState extends State<EnrollPage> {
       _snack('Camera is not available');
       return;
     }
-    final id = _idController.text.trim().isEmpty
+    var enrollId = _idController.text.trim().isEmpty
         ? 's_${DateTime.now().millisecondsSinceEpoch}'
         : _idController.text.trim();
+    var enrollName = name;
     // Typing an already-enrolled id replaces that student's stored sample
     // silently - confirm first, before any capture (EnrollGuard).
-    final existing = EnrollGuard.findExisting(_students, id);
+    final existing = EnrollGuard.findExisting(_students, enrollId);
     if (existing != null) {
-      final confirmed = await _confirmReplace(existing, id);
+      final confirmed = await _confirmReplace(existing, enrollId);
       if (!confirmed) return;
     }
     setState(() => _busy = true);
@@ -92,6 +93,34 @@ class _EnrollPageState extends State<EnrollPage> {
       // operator guidance instead of an obfuscated stack trace.
       for (var attempt = 1; attempt <= 2; attempt++) {
         shotPath = (await camera.takePicture()).path;
+        // The face IS the identity key: before registering, ask the engine
+        // who this capture belongs to. If it matches an already-enrolled
+        // student, the operator decides (replace their sample / enroll as
+        // new anyway / cancel) - that keeps a school with hundreds of
+        // students self-managing without ids, cards or roll numbers.
+        String? matchedId;
+        try {
+          matchedId = await widget.face.verify(shotPath);
+        } on PlatformException catch (error) {
+          // Identification is a convenience guard, not a requirement -
+          // never block enrollment on it (register retries below).
+          _logEngineFailure('identify', error);
+        }
+        if (matchedId != null && matchedId != enrollId) {
+          final matched = EnrollGuard.findExisting(_students, matchedId);
+          if (matched != null) {
+            final adopt = await _confirmDuplicate(matched);
+            if (adopt == null) return; // cancel: nothing was saved
+            final plan = EnrollGuard.resolveDuplicate(
+              matched: matched,
+              typedId: enrollId,
+              typedName: name,
+              adopt: adopt,
+            );
+            enrollId = plan.id;
+            enrollName = plan.name;
+          }
+        }
         // Quality gate, non-destructive (review F1): register under a
         // throwaway id first; the old sample of a replace is overwritten
         // only after the new capture proves itself.
@@ -100,7 +129,7 @@ class _EnrollPageState extends State<EnrollPage> {
           await widget.face.register(
             studentId: tempId,
             imagePath: shotPath,
-            name: name,
+            name: enrollName,
           );
         } on PlatformException catch (error) {
           _logEngineFailure('register', error);
@@ -137,11 +166,11 @@ class _EnrollPageState extends State<EnrollPage> {
         // a failed promotion can never cost the old sample. The engine has
         // already processed these exact bytes, so a throw here is rare.
         try {
-          await widget.face.forget(id);
+          await widget.face.forget(enrollId);
           await widget.face.register(
-            studentId: id,
+            studentId: enrollId,
             imagePath: shotPath,
-            name: name,
+            name: enrollName,
           );
         } on PlatformException catch (error) {
           _logEngineFailure('promote', error);
@@ -151,7 +180,11 @@ class _EnrollPageState extends State<EnrollPage> {
         }
         await _discardTemp(tempId);
         await widget.store.addStudent(
-          Student(id: id, name: name, createdAt: DateTime.now().toUtc()),
+          Student(
+            id: enrollId,
+            name: enrollName,
+            createdAt: DateTime.now().toUtc(),
+          ),
         );
         _nameController.clear();
         _idController.clear();
@@ -159,7 +192,7 @@ class _EnrollPageState extends State<EnrollPage> {
         await _reload();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('$name enrolled as $id')),
+            SnackBar(content: Text('$enrollName enrolled')),
           );
         }
         return;
@@ -187,6 +220,38 @@ class _EnrollPageState extends State<EnrollPage> {
   void _logEngineFailure(String stage, PlatformException error) {
     debugPrint('enroll: face engine failed in $stage: '
         '${error.code} ${error.message}');
+  }
+
+  /// The identify pass matched the capture to an already-enrolled student.
+  /// Returns true = replace that student's sample, false = enroll as a NEW
+  /// student anyway, null = cancel.
+  Future<bool?> _confirmDuplicate(Student matched) async {
+    return showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Face already enrolled'),
+        content: Text(
+          'This face matches ${matched.name}, who is already enrolled. '
+          'Replace their stored face sample, or enroll it as a NEW student '
+          'anyway (not recommended - the door will keep recognizing the '
+          'older sample).',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(null),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Enroll as new anyway'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text("Replace ${matched.name}'s sample"),
+          ),
+        ],
+      ),
+    );
   }
 
   /// Asks the operator before overwriting an existing student's face sample.
@@ -327,7 +392,9 @@ class _EnrollPageState extends State<EnrollPage> {
             controller: _idController,
             decoration: const InputDecoration(
               labelText: 'Student id (optional)',
-              helperText: 'Left empty, an id is generated automatically',
+              helperText:
+                  'Ids are internal - leave empty and one is generated; '
+                  'nobody ever needs to type or share it',
               border: OutlineInputBorder(),
             ),
           ),
@@ -350,7 +417,9 @@ class _EnrollPageState extends State<EnrollPage> {
             (student) => ListTile(
               leading: const Icon(Icons.face),
               title: Text(student.name),
-              subtitle: Text(student.id),
+              // Ids stay internal (name-first flow): no id shown to the
+              // operator - identity at the door is the face, and duplicate
+              // checks happen automatically on capture.
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
