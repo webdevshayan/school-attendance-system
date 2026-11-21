@@ -73,4 +73,32 @@ class CodeService {
       return null;
     }
   }
+
+  /// Revokes a previously minted pairing code via POST /api/codes/revoke
+  /// (same HMAC scheme). Returns true when the server accepted the revoke -
+  /// idempotent, so an unknown or already-revoked code also succeeds. False
+  /// means "not confirmed" (unsigned local build, offline, server error);
+  /// the operation is safe to retry.
+  Future<bool> revoke(String code) async {
+    // Unsigned local builds and unconfigured URLs never touch the network.
+    if (baseUrl == AdminConfig.unconfiguredServerUrl) return false;
+    if (signingSecret.isEmpty) return false;
+    if (code.isEmpty) return false;
+    final body = jsonEncode(<String, dynamic>{'code': code});
+    try {
+      final response = await _client.post(
+        Uri.parse('$baseUrl/api/codes/revoke'),
+        headers: signedHeaders(
+          deviceId: deviceId,
+          secret: signingSecret,
+          body: body,
+        ),
+        body: body,
+      );
+      return response.statusCode >= 200 && response.statusCode < 300;
+    } catch (_) {
+      // Offline or transport error: caller retries later.
+      return false;
+    }
+  }
 }
