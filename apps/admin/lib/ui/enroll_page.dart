@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import '../core/db/attendance_store.dart';
 import '../core/pairing/code_service.dart';
+import '../core/recognition/enrollment_guard.dart';
 import '../core/recognition/face_service.dart';
 
 /// Registers a student: name (+ optional id) -> camera snap -> on-device
@@ -77,11 +78,33 @@ class _EnrollPageState extends State<EnrollPage> {
       final id = _idController.text.trim().isEmpty
           ? 's_${DateTime.now().millisecondsSinceEpoch}'
           : _idController.text.trim();
+      // Typing an already-enrolled id replaces that student's stored sample
+      // silently - confirm first (decision logic in EnrollGuard).
+      final existing = EnrollGuard.findExisting(_students, id);
+      if (existing != null) {
+        final confirmed = await _confirmReplace(existing, id);
+        if (!confirmed) return; // finally deletes the shot
+      }
       await widget.face.register(
         studentId: id,
         imagePath: shotPath,
         name: name,
       );
+      // Quality gate: the sample must recognize itself straight back.
+      // Otherwise the door would quietly produce "no match" for the very
+      // student who just enrolled.
+      final selfMatch = await widget.face.verify(shotPath);
+      if (!EnrollGuard.sampleTrusted(selfMatch, id)) {
+        try {
+          await widget.face.forget(id);
+        } catch (_) {}
+        _snack(existing != null
+            ? 'Retake failed the quality check and ${existing.name}\'s old '
+                'sample was already replaced - re-enroll them now.'
+            : 'Face sample was too poor to trust - retake in better light. '
+                'Nothing was saved.');
+        return;
+      }
       await widget.store.addStudent(
         Student(id: id, name: name, createdAt: DateTime.now().toUtc()),
       );
@@ -104,6 +127,31 @@ class _EnrollPageState extends State<EnrollPage> {
       }
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// Asks the operator before overwriting an existing student's face sample.
+  Future<bool> _confirmReplace(Student existing, String id) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Replace face sample?'),
+        content: Text(
+          '${existing.name} ($id) is already enrolled. Capturing again '
+          'replaces their stored face sample (attendance history is kept).',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Replace'),
+          ),
+        ],
+      ),
+    );
+    return confirmed == true;
   }
 
   Future<void> _remove(Student student) async {
