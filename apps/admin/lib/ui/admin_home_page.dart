@@ -9,6 +9,7 @@ import '../core/attendance/attendance_pipeline.dart';
 import '../core/config.dart';
 import '../core/db/attendance_store.dart';
 import '../core/db/libsql_store.dart';
+import '../core/export/csv_share.dart';
 import '../core/recognition/face_service.dart';
 import '../core/sync/sync_service.dart';
 import 'enroll_page.dart';
@@ -179,6 +180,30 @@ class _AdminHomePageState extends State<AdminHomePage> {
     await _refreshStats();
     if (mounted && pushed > 0) {
       setState(() => _status = 'Synced $pushed record(s) to the server');
+    }
+  }
+
+  /// Exports the whole attendance register to CSV and opens the share
+  /// sheet. Failures surface as a snackbar - export must never take the
+  /// door loop down.
+  Future<void> _exportCsv() async {
+    final store = _store;
+    if (store == null || !mounted) return;
+    try {
+      final count = await exportAttendanceCsv(store);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Register ready ($count marks) - choose where to share or save it',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Export failed: $error')),
+      );
     }
   }
 
@@ -381,6 +406,11 @@ class _AdminHomePageState extends State<AdminHomePage> {
           icon: const Icon(Icons.sync),
           label: const Text('Sync now'),
           onPressed: () => unawaited(_syncTick()),
+        ),
+        TextButton.icon(
+          icon: const Icon(Icons.upload_file),
+          label: const Text('Export CSV'),
+          onPressed: () => unawaited(_exportCsv()),
         ),
       ],
     );

@@ -173,6 +173,20 @@ class LibsqlAttendanceStore implements AttendanceStore {
     return (rows.first['n'] as int) > 0;
   }
 
+  @override
+  Future<List<AttendanceRecord>> attendanceBetween(
+    DateTime startUtc,
+    DateTime endUtc,
+  ) async {
+    final rows = await _db.query(
+      '''select * from attendance
+         where marked_at >= ? and marked_at < ?
+         order by marked_at desc''',
+      positional: [_boundsKey(startUtc), _boundsKey(endUtc)],
+    );
+    return rows.map(_recordFromRow).toList();
+  }
+
   AttendanceRecord _recordFromRow(Map<String, dynamic> row) => AttendanceRecord(
         id: row['id'] as int,
         studentId: row['student_id'] as String,
@@ -186,4 +200,13 @@ class LibsqlAttendanceStore implements AttendanceStore {
   /// UTC calendar-day key ('YYYY-MM-DD') used for day-level queries.
   String _dayKey(DateTime day) =>
       day.toUtc().toIso8601String().substring(0, 10);
+
+  /// Window-bound key for text comparison against stored timestamps. Stored
+  /// values may or may not carry a fractional part (Dart's toIso8601String
+  /// omits it on whole seconds), so bounds always carry '.000' - text
+  /// ordering then behaves as a half-open window for both row styles.
+  String _boundsKey(DateTime day) {
+    final iso = day.toUtc().toIso8601String();
+    return iso.contains('.') ? iso : '${iso.substring(0, 19)}.000Z';
+  }
 }

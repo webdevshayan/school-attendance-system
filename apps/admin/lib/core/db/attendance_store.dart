@@ -68,6 +68,13 @@ abstract class AttendanceStore {
   /// Attendance marks for the given UTC calendar day, newest first.
   Future<List<AttendanceRecord>> attendanceForDay(DateTime utcDay);
 
+  /// All attendance marks in the half-open UTC window [startUtc, endUtc),
+  /// newest first. Powers the register export (start-of-time -> tomorrow).
+  Future<List<AttendanceRecord>> attendanceBetween(
+    DateTime startUtc,
+    DateTime endUtc,
+  );
+
   /// Whether [studentId] already has a [status] mark on [utcDay].
   Future<bool> hasMarkOnDay(String studentId, String status, DateTime utcDay);
 }
