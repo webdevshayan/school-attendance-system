@@ -369,6 +369,16 @@ class _EnrollPageState extends State<EnrollPage> {
                   'parents can pair with it until '
                   '${info.expiresAt.toLocal().toString().split(' ').first}.',
                 ),
+                const SizedBox(height: 4),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    icon: const Icon(Icons.delete_forever, size: 18),
+                    label: const Text('Revoke this code'),
+                    onPressed: () =>
+                        unawaited(_revokePairingCode(dialogContext, info)),
+                  ),
+                ),
               ],
             );
           },
@@ -379,6 +389,51 @@ class _EnrollPageState extends State<EnrollPage> {
             child: const Text('Done'),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Revokes the pairing code the operator is looking at, after a warning.
+  /// Only the INVITATION dies (new pairings are refused); phones already
+  /// paired keep their access. The dialog closes so the shown code can no
+  /// longer be mistaken for a working one.
+  Future<void> _revokePairingCode(
+    BuildContext dialogContext,
+    PairingCodeInfo info,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (confirmContext) => AlertDialog(
+        title: const Text('Revoke this code?'),
+        content: Text(
+          'Guardians who still have this code can no longer pair with it. '
+          'Phones that ALREADY paired keep working. This cannot be undone - '
+          'mint a fresh code if you need a new invitation.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(confirmContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(confirmContext).pop(true),
+            child: const Text('Revoke'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final service = widget.codeService ?? CodeService();
+    final ok = await service.revoke(info.code);
+    if (!mounted) return;
+    Navigator.of(dialogContext).pop();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ok
+              ? 'Code revoked - it can no longer pair anyone'
+              : 'Could not revoke right now - check connectivity and try again',
+        ),
       ),
     );
   }
