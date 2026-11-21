@@ -158,6 +158,22 @@ jobs:
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
           PROD_URL="https://rgs-attendance-system.vercel.app"
+          API="https://api.vercel.com"
+          AUTH="Authorization: Bearer $VERCEL_TOKEN"
+
+          # Resolve the project once (VERCEL_PROJECT_ID may be the name or the
+          # id) and capture the current production deployment as the rollback
+          # anchor for the gate below.
+          PROJECT_JSON=$(curl -sS -H "$AUTH" "$API/v9/projects/$VERCEL_PROJECT_ID?teamId=$VERCEL_ORG_ID")
+          PID=$(printf '%s' "$PROJECT_JSON" | jq -r '.id')
+          PNAME=$(printf '%s' "$PROJECT_JSON" | jq -r '.name')
+          if [ "$PID" = "null" ] || [ -z "$PID" ]; then
+            echo "::error::could not resolve the Vercel project (check VERCEL_PROJECT_ID/VERCEL_ORG_ID)"
+            exit 1
+          fi
+          echo "project: $PNAME ($PID)"
+          ROLLBACK_ID=$(curl -sS -H "$AUTH" "$API/v6/deployments?teamId=$VERCEL_ORG_ID&projectId=$PID&target=production&state=READY&limit=1" | jq -r '.deployments[0].uid // .deployments[0].id // "null"')
+          echo "rollback anchor (current production deployment): $ROLLBACK_ID"
 
           set_framework() {
             if [ "$1" = "go" ]; then body='{"framework": "go"}'; else body='{"framework": null}'; fi
@@ -260,21 +276,57 @@ jobs:
           fi
 
           echo "verified on preview: $URL - promoting to production"
-          # --scope: the VERCEL_TOKEN is team-scoped; without an explicit
-          # scope promote tried to resolve a *user* and died with
-          # "Error: User not found. (404)" (run 44857267417). Promoting a
-          # preview build triggers a full production rebuild - the strict
-          # production gate below covers the wait (zero downtime: the domain
-          # keeps serving the previous deployment until the new one is ready).
-          if ! npx --yes vercel@latest promote "$URL" --yes --scope "$VERCEL_ORG_ID"; then
-            echo "::error::promote failed - production keeps running the previous deployment"
+          # Promote-by-creation: the exact REST call `vercel promote` makes
+          # for a preview deployment (packages/cli/src/commands/promote/
+          # request-promote.ts in vercel/vercel) - a full production rebuild
+          # from the verified source. The CLI itself is unusable here: it
+          # resolves the token's *user* and dies with "User not found. (404)"
+          # for team-scoped tokens (runs 44857267417, 44857881581), so this
+          # pipeline talks to the REST API directly with teamId scoping.
+          URL_HOST="${URL#https://}"
+          DPL_ID=$(curl -sS -H "$AUTH" "$API/v6/deployments?teamId=$VERCEL_ORG_ID&projectId=$PID&target=preview&state=READY&limit=10" \
+            | jq -r --arg u "$URL_HOST" '.deployments[] | select(.url==$u) | (.uid // .id)' | head -1)
+          if [ -z "$DPL_ID" ] || [ "$DPL_ID" = "null" ]; then
+            echo "::error::could not resolve the verified preview deployment ($URL)"
+            exit 1
+          fi
+          NEW=$(curl -sS -X POST -H "$AUTH" -H "Content-Type: application/json" \
+            "$API/v13/deployments?teamId=$VERCEL_ORG_ID" \
+            -d "{\"deploymentId\":\"$DPL_ID\",\"name\":\"$PNAME\",\"target\":\"production\",\"meta\":{\"action\":\"promote\"}}")
+          NEW_ID=$(printf '%s' "$NEW" | jq -r '.id // .uid // "null"')
+          if [ "$NEW_ID" = "null" ] || [ -z "$NEW_ID" ]; then
+            echo "::error::promote-by-creation failed: $(printf '%s' "$NEW" | head -c 300)"
+            exit 1
+          fi
+          echo "production rebuild requested ($NEW_ID) - waiting for READY"
+          STATE=""
+          for i in $(seq 1 24); do
+            STATE=$(curl -sS -H "$AUTH" "$API/v13/deployments/$NEW_ID?teamId=$VERCEL_ORG_ID" | jq -r '.readyState // "UNKNOWN"')
+            echo "production deployment state: $STATE"
+            if [ "$STATE" = "READY" ]; then break; fi
+            if [ "$STATE" = "ERROR" ] || [ "$STATE" = "CANCELED" ]; then
+              echo "::error::production rebuild failed ($STATE)"
+              exit 1
+            fi
+            sleep 10
+          done
+          if [ "$STATE" != "READY" ]; then
+            echo "::error::production rebuild did not become READY in time"
             exit 1
           fi
 
           if ! check_health "$PROD_URL"; then
             echo "::warning::production health failed after promote - rolling back"
-            npx --yes vercel@latest rollback --yes --scope "$VERCEL_ORG_ID" || echo "::warning::automatic rollback failed - roll back in the Vercel dashboard (Deployments -> previous production -> Promote/Rollback)"
+            if [ "$ROLLBACK_ID" != "null" ] && [ -n "$ROLLBACK_ID" ]; then
+              # Instant rollback = promote the previous production deployment
+              # (same endpoint the CLI rollback drives).
+              curl -sS -X POST -H "$AUTH" -H "Content-Type: application/json" \
+                "$API/v10/projects/$PID/promote/$ROLLBACK_ID?teamId=$VERCEL_ORG_ID" \
+                -d '{}' >/dev/null 2>&1 || echo "::warning::automatic rollback failed - roll back in the Vercel dashboard (Deployments -> previous production -> Promote/Rollback)"
+            else
+              echo "::warning::no rollback anchor - roll back in the Vercel dashboard (Deployments -> previous production -> Promote/Rollback)"
+            fi
             echo "::error::production was not healthy after promote - rolled back"
             exit 1
           fi
-          echo "PRODUCTION LIVE AND HEALTHY - promoted $URL"
+          echo "PRODUCTION LIVE AND HEALTHY - promoted from $URL"
