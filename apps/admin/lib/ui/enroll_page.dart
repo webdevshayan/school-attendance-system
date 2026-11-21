@@ -3,9 +3,11 @@ import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../core/db/attendance_store.dart';
 import '../core/pairing/code_service.dart';
+import '../core/recognition/enroll_errors.dart';
 import '../core/recognition/enrollment_guard.dart';
 import '../core/recognition/face_service.dart';
 
@@ -71,62 +73,99 @@ class _EnrollPageState extends State<EnrollPage> {
       _snack('Camera is not available');
       return;
     }
+    final id = _idController.text.trim().isEmpty
+        ? 's_${DateTime.now().millisecondsSinceEpoch}'
+        : _idController.text.trim();
+    // Typing an already-enrolled id replaces that student's stored sample
+    // silently - confirm first, before any capture (EnrollGuard).
+    final existing = EnrollGuard.findExisting(_students, id);
+    if (existing != null) {
+      final confirmed = await _confirmReplace(existing, id);
+      if (!confirmed) return;
+    }
     setState(() => _busy = true);
     String? shotPath;
     try {
-      shotPath = (await camera.takePicture()).path;
-      final id = _idController.text.trim().isEmpty
-          ? 's_${DateTime.now().millisecondsSinceEpoch}'
-          : _idController.text.trim();
-      // Typing an already-enrolled id replaces that student's stored sample
-      // silently - confirm first (decision logic in EnrollGuard).
-      final existing = EnrollGuard.findExisting(_students, id);
-      if (existing != null) {
-        final confirmed = await _confirmReplace(existing, id);
-        if (!confirmed) return; // finally deletes the shot
-      }
-      // Quality gate, non-destructive (review F1): register under a
-      // throwaway id, and only after the sample recognizes itself back does
-      // it get promoted to the real id. A replace therefore overwrites the
-      // old sample LAST - a failed retake can no longer leave an enrolled
-      // student faceless.
-      final tempId = 'tmp_${DateTime.now().microsecondsSinceEpoch}';
-      await widget.face.register(
-        studentId: tempId,
-        imagePath: shotPath,
-        name: name,
-      );
-      final selfMatch = await widget.face.verify(shotPath);
-      if (!EnrollGuard.sampleTrusted(selfMatch, tempId)) {
+      // The face engine (ML Kit on the Java side) can fail on a bad frame
+      // with a native NPE - one ugly capture must not kill enrollment.
+      // Retry ONCE with a fresh capture; anything after that fails with
+      // operator guidance instead of an obfuscated stack trace.
+      for (var attempt = 1; attempt <= 2; attempt++) {
+        shotPath = (await camera.takePicture()).path;
+        // Quality gate, non-destructive (review F1): register under a
+        // throwaway id first; the old sample of a replace is overwritten
+        // only after the new capture proves itself.
+        final tempId = 'tmp_${DateTime.now().microsecondsSinceEpoch}';
         try {
-          await widget.face.forget(tempId);
-        } catch (_) {}
-        _snack('Face sample was too poor to trust - retake in better light. '
-            'Nothing was saved.');
+          await widget.face.register(
+            studentId: tempId,
+            imagePath: shotPath,
+            name: name,
+          );
+        } on PlatformException catch (error) {
+          _logEngineFailure('register', error);
+          await _discardTemp(tempId);
+          if (attempt == 1) {
+            _snack('Face engine hiccup on that frame - retaking '
+                'automatically...');
+            final stale = shotPath;
+            shotPath = null;
+            try {
+              await File(stale).delete();
+            } catch (_) {}
+            continue;
+          }
+          _snack(EnrollErrors.message(error));
+          return;
+        }
+        String? selfMatch;
+        try {
+          selfMatch = await widget.face.verify(shotPath);
+        } on PlatformException catch (error) {
+          _logEngineFailure('verify', error);
+          await _discardTemp(tempId);
+          _snack(EnrollErrors.message(error));
+          return;
+        }
+        if (!EnrollGuard.sampleTrusted(selfMatch, tempId)) {
+          await _discardTemp(tempId);
+          _snack('Face sample was too poor to trust - retake in better '
+              'light. Nothing was saved.');
+          return;
+        }
+        // Promote: true replacement is delete-then-register, done LAST so
+        // a failed promotion can never cost the old sample. The engine has
+        // already processed these exact bytes, so a throw here is rare.
+        try {
+          await widget.face.forget(id);
+          await widget.face.register(
+            studentId: id,
+            imagePath: shotPath,
+            name: name,
+          );
+        } on PlatformException catch (error) {
+          _logEngineFailure('promote', error);
+          await _discardTemp(tempId);
+          _snack('Enrollment could not be saved: ${EnrollErrors.message(error)}');
+          return;
+        }
+        await _discardTemp(tempId);
+        await widget.store.addStudent(
+          Student(id: id, name: name, createdAt: DateTime.now().toUtc()),
+        );
+        _nameController.clear();
+        _idController.clear();
+        await widget.onChanged();
+        await _reload();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('$name enrolled as $id')),
+          );
+        }
         return;
       }
-      await widget.face.register(
-        studentId: id,
-        imagePath: shotPath,
-        name: name,
-      );
-      try {
-        await widget.face.forget(tempId);
-      } catch (_) {}
-      await widget.store.addStudent(
-        Student(id: id, name: name, createdAt: DateTime.now().toUtc()),
-      );
-      _nameController.clear();
-      _idController.clear();
-      await widget.onChanged();
-      await _reload();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('$name enrolled as $id')),
-        );
-      }
     } catch (error) {
-      _snack('Enrollment failed: $error');
+      _snack('Enrollment failed: ${EnrollErrors.message(error)}');
     } finally {
       if (shotPath != null) {
         try {
@@ -135,6 +174,19 @@ class _EnrollPageState extends State<EnrollPage> {
       }
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<void> _discardTemp(String tempId) async {
+    try {
+      await widget.face.forget(tempId);
+    } catch (_) {}
+  }
+
+  /// Full engine failures go to the log for diagnosis; the operator only
+  /// ever sees the mapped one-liner.
+  void _logEngineFailure(String stage, PlatformException error) {
+    debugPrint('enroll: face engine failed in $stage: '
+        '${error.code} ${error.message}');
   }
 
   /// Asks the operator before overwriting an existing student's face sample.
