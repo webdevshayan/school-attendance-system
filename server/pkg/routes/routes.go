@@ -1,9 +1,9 @@
 // Package routes mounts the whole API on one mux. It is the single source of
-// routing shared by the three ways this service runs:
+// routing shared by the ways this service runs:
 //
+//   - main.go             the Vercel Go framework entrypoint (preset "Go") and
+//     the local development server
 //   - api/*.go            per-file functions (framework preset "Other", module mode)
-//   - index.go            one catch-all function (framework preset "Go")
-//   - cmd/server/main.go  a plain local HTTP server for development
 //
 // Configuration is read from the environment exactly like the api/ adapters
 // do it (DepsFromEnv per mux), so every shape behaves identically.

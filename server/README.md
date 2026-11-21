@@ -47,9 +47,12 @@ X-Sync-Signature: <hex HMAC-SHA256(secret, deviceId \n timestamp \n body)>
 
 ## Layout & the Vercel Go runtime contract
 
-All logic lives in `pkg/` (authn, turso, store, fanout, handlers) — `go test ./pkg/...` covers it in CI. The `api/*.go` files are thin adapters forming **one `package handler`**, each exporting a **distinctly named** function with the standard signature (`Health`, `Sync`, `Register`). In module mode (a `go.mod` present) the runtime compiles the whole package per route, rewrites the `go.mod` module line to the package name, and renames the entrypoint's handler (found by *signature*, any exported name) during that route's build — so per-file exports must stay distinct and `pkg/handlers` calls must stay qualified. Stdlib only, no framework; Turso is reached over its HTTP pipeline API (`pkg/turso`) because the official SDK needs a native libsql core this runtime can't run.
+All logic lives in `pkg/` (authn, turso, store, fanout, handlers) — `go test ./pkg/...` covers it in CI. Two serving shapes share it, both dispatching through `pkg/routes`:
 
-**Framework Preset on Vercel must stay "Other"** — a Golang app preset makes the platform look for `main.go` and fail with "No Go entrypoint found". `deploy_server.yml` self-heals this setting before every deploy.
+- **Primary — Framework Preset `Go`**: Vercel detects the project-root `go.mod` + the `main.go` entrypoint and builds **one server binary**. The entrypoint contract ([docs/functions/runtimes/go](https://vercel.com/docs/functions/runtimes/go)) is strict: `package main`, listening on the `PORT` environment variable. `main.go` is exactly that — which also makes it the local dev server (`go run .` from `server/`).
+- **Fallback — Framework Preset `Other`**: the `api/*.go` files are thin adapters forming **one `package handler`**, each exporting a **distinctly named** function with the standard signature (`Health`, `Sync`, `Register`). In module mode the runtime compiles the package per route and renames the handler it matches by *signature* — per-file exports must stay distinct and `pkg/handlers` calls stay qualified. Stdlib only, no framework; Turso is reached over its HTTP pipeline API (`pkg/turso`) because the official SDK needs a native libsql core this runtime can't run.
+
+`deploy_server.yml` sets the preset to `Go` before every deploy, **verifies the deployment on a preview URL with the real credentials and only then promotes it to production**; an unverifiable Go-framework build automatically falls back to `Other`. Production is never touched by an unverified build — the 2026-11-20/21 incidents ("No Go entrypoint found", then `fork/exec ./user-server: exec format error` at invocation) came from unverified deployments going live, which this pipeline makes impossible.
 
 `vercel.json` disables Vercel's own git deployments so the Actions pipeline (`deploy_server.yml`) is the single deploy path.
 

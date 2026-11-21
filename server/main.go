@@ -1,25 +1,37 @@
-// Package handler (project root) hosts the Vercel Go framework entrypoint.
+// Command server is the Vercel Go framework entrypoint - and, being a plain
+// package-main HTTP server, also the local development server.
 //
-// The Go framework preset ("Go" in the dashboard, slug "go") builds this
-// directory's index.go with @vercel/go: ONE serverless function whose
-// exported Handler sits behind a catch-all route, so every /api/* path lands
-// here and is dispatched internally. The dispatch itself lives in main.go so
-// the layout matches what the preset's detector expects (go.mod + main.go)
-// while index.go stays a pure adapter.
+// The Go framework preset ("framework": "go", the dashboard's "Go") detects
+// this project root's go.mod plus the main.go entrypoint and builds ONE
+// server binary. The entrypoint contract (vercel.com/docs/functions/runtimes/
+// go) is strict: package main, listening on the PORT environment variable.
+// The 2026-11-20/21 production incidents ("fork/exec ./user-server: exec
+// format error", FUNCTION_INVOCATION_FAILED) came from a non-main package
+// sitting here: the builder had no runnable server to compile, so the
+// runtime executed a placeholder artifact.
 //
-// The builder refuses "package main" entrypoints when a go.mod exists (the
-// generated bootstrap owns main()), which is why this root package is
-// "handler" and the runnable development server lives in cmd/server.
-package handler
+// Routing is shared: the same pkg/routes mux serves this binary and the
+// api/*.go per-file functions that the pipeline falls back to (preset
+// "Other") when a Go-framework build cannot be verified.
+package main
 
 import (
+	"log"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/webdevshayan/school-attendance-system/server/pkg/routes"
 )
 
-// dispatch sends one request through the shared mux - the same routing the
-// per-file api/ functions and the local cmd/server use.
-func dispatch(w http.ResponseWriter, r *http.Request) {
-	routes.New().ServeHTTP(w, r)
+func main() {
+	addr := os.Getenv("PORT")
+	switch {
+	case addr == "":
+		addr = ":3000"
+	case !strings.Contains(addr, ":"):
+		addr = ":" + addr
+	}
+	log.Printf("school-attendance-server listening on %s", addr)
+	log.Fatal(http.ListenAndServe(addr, routes.New()))
 }
