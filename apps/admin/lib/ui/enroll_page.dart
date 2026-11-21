@@ -10,6 +10,7 @@ import '../core/pairing/code_service.dart';
 import '../core/recognition/enroll_errors.dart';
 import '../core/recognition/enrollment_guard.dart';
 import '../core/recognition/face_service.dart';
+import '../core/roster/roster_search.dart';
 
 /// Registers a student: name (+ optional id) -> camera snap -> on-device
 /// face sample + local database row. Each student row also mints a parent
@@ -40,8 +41,16 @@ class EnrollPage extends StatefulWidget {
 class _EnrollPageState extends State<EnrollPage> {
   final _nameController = TextEditingController();
   final _idController = TextEditingController();
+  final _searchController = TextEditingController();
   bool _busy = false;
   List<Student> _students = const [];
+
+  /// The visible roster: the search query filters the in-memory list, so
+  /// a school with hundreds of students can still find anyone instantly.
+  List<Student> get _filtered => RosterSearch.filter(
+        _students,
+        _searchController.text,
+      );
 
   @override
   void initState() {
@@ -53,6 +62,7 @@ class _EnrollPageState extends State<EnrollPage> {
   void dispose() {
     _nameController.dispose();
     _idController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -411,9 +421,24 @@ class _EnrollPageState extends State<EnrollPage> {
             onPressed: _busy ? null : _enroll,
           ),
           const SizedBox(height: 24),
-          Text('Enrolled (${_students.length})',
-              style: Theme.of(context).textTheme.titleMedium),
-          ..._students.map(
+          TextField(
+            controller: _searchController,
+            onChanged: (_) => setState(() {}),
+            decoration: const InputDecoration(
+              prefixIcon: Icon(Icons.search),
+              hintText: 'Find an enrolled student by name',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Builder(builder: (context) {
+            final filtered = _filtered;
+            final count = filtered.length == _students.length
+                ? 'Enrolled (${_students.length})'
+                : 'Showing ${filtered.length} of ${_students.length}';
+            return Text(count, style: Theme.of(context).textTheme.titleMedium);
+          }),
+          ..._filtered.map(
             (student) => ListTile(
               leading: const Icon(Icons.face),
               title: Text(student.name),
@@ -440,6 +465,13 @@ class _EnrollPageState extends State<EnrollPage> {
             const Padding(
               padding: EdgeInsets.all(8),
               child: Text('Nobody enrolled yet. Capture a face to start.'),
+            )
+          else if (_filtered.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text(
+                'No enrolled student matches "${_searchController.text.trim()}".',
+              ),
             ),
         ],
       ),
