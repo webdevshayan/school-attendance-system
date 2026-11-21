@@ -197,7 +197,7 @@ jobs:
 
           check_health() {
             base="$1"; mode="${2:-strict}"
-            for attempt in 1 2 3 4 5 6; do
+            for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
               code=$(curl -sS --max-time 15 -o /tmp/health.json -w '%{http_code}' "$base/api/health" || echo 000)
               if [ "$code" = 200 ] && grep -q '"status":"ok"' /tmp/health.json; then
                 if [ "$mode" = "loose" ] && ! grep -q '"turso":"configured"' /tmp/health.json; then
@@ -260,14 +260,20 @@ jobs:
           fi
 
           echo "verified on preview: $URL - promoting to production"
-          if ! npx --yes vercel@latest promote "$URL" --yes; then
+          # --scope: the VERCEL_TOKEN is team-scoped; without an explicit
+          # scope promote tried to resolve a *user* and died with
+          # "Error: User not found. (404)" (run 44857267417). Promoting a
+          # preview build triggers a full production rebuild - the strict
+          # production gate below covers the wait (zero downtime: the domain
+          # keeps serving the previous deployment until the new one is ready).
+          if ! npx --yes vercel@latest promote "$URL" --yes --scope "$VERCEL_ORG_ID"; then
             echo "::error::promote failed - production keeps running the previous deployment"
             exit 1
           fi
 
           if ! check_health "$PROD_URL"; then
             echo "::warning::production health failed after promote - rolling back"
-            npx --yes vercel@latest rollback --yes || echo "::warning::automatic rollback failed - roll back in the Vercel dashboard (Deployments -> previous production -> Promote/Rollback)"
+            npx --yes vercel@latest rollback --yes --scope "$VERCEL_ORG_ID" || echo "::warning::automatic rollback failed - roll back in the Vercel dashboard (Deployments -> previous production -> Promote/Rollback)"
             echo "::error::production was not healthy after promote - rolled back"
             exit 1
           fi
