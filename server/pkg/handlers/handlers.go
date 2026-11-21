@@ -8,8 +8,11 @@
 //	SYNC_SIGNING_SECRET   HMAC secret shared with admin devices (required)
 //	TURSO_DATABASE_URL    libSQL URL (required for persistence)
 //	TURSO_AUTH_TOKEN      libSQL token (required for persistence)
-//	NITROPING_WEBHOOK_URL push relay endpoint (optional, best-effort)
-//	NITROPING_API_KEY     push relay bearer token (optional)
+//
+// Live delivery to parents is the cursor feed: parent devices poll
+// GET /api/events with their pairing token and resume from the last seen
+// row id. That is the official push channel by design - free, serverless-
+// friendly, and with zero third-party relay credentials.
 package handlers
 
 import (
@@ -23,7 +26,6 @@ import (
 	"time"
 
 	"github.com/webdevshayan/school-attendance-system/server/pkg/authn"
-	"github.com/webdevshayan/school-attendance-system/server/pkg/fanout"
 	"github.com/webdevshayan/school-attendance-system/server/pkg/store"
 	"github.com/webdevshayan/school-attendance-system/server/pkg/turso"
 )
@@ -50,22 +52,16 @@ func depStore() store.Store {
 	return sharedStore
 }
 
-// Deps is the full dependency set for the endpoint handlers. A nil Store or
-// Pusher means that integration is not configured; Sync/Register answer 503
-// (Store) or skip silently (Pusher) accordingly.
+// Deps is the full dependency set for the endpoint handlers. A nil Store
+// means persistence is not configured; Sync/Register answer 503 accordingly.
 type Deps struct {
 	Secret string
 	Store  store.Store
-	Pusher fanout.Pusher
 }
 
 // DepsFromEnv assembles the dependency set from the process environment.
 func DepsFromEnv() Deps {
-	var p fanout.Pusher
-	if hook := os.Getenv("NITROPING_WEBHOOK_URL"); hook != "" {
-		p = fanout.NewWebhook(hook, os.Getenv("NITROPING_API_KEY"))
-	}
-	return Deps{Secret: os.Getenv("SYNC_SIGNING_SECRET"), Store: depStore(), Pusher: p}
+	return Deps{Secret: os.Getenv("SYNC_SIGNING_SECRET"), Store: depStore()}
 }
 
 func writeJSON(w http.ResponseWriter, code int, payload map[string]any) {
@@ -76,21 +72,20 @@ func writeJSON(w http.ResponseWriter, code int, payload map[string]any) {
 
 // Health reports liveness plus which optional integrations are configured.
 // Additive over the Phase 1 stub: "service" and "status":"ok" are unchanged,
-// so existing probes keep passing.
+// so existing probes keep passing. "push" names the parent delivery channel
+// (the cursor poll of /api/events) rather than a configured relay - there is
+// no third-party push dependency left to configure.
 func Health(d Deps, w http.ResponseWriter, r *http.Request) {
-	tursoState, fanoutState := "missing", "disabled"
+	tursoState := "missing"
 	if d.Store != nil {
 		tursoState = "configured"
-	}
-	if d.Pusher != nil {
-		fanoutState = "configured"
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"service": "school-attendance-server",
 		"status":  "ok",
 		"signing": d.Secret != "",
 		"turso":   tursoState,
-		"fanout":  fanoutState,
+		"push":    "polling",
 	})
 }
 
@@ -104,7 +99,8 @@ type syncRequest struct {
 
 // Sync accepts one attendance row from a signed, registered device:
 // verify signature -> validate body -> check the device allowlist ->
-// persist (server-side de-duplicated) -> best-effort fan-out to the parents.
+// persist (server-side de-duplicated). Parents receive the row through
+// their own cursor poll of /api/events, so no push fan-out happens here.
 func Sync(d Deps, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed, use POST"})
@@ -171,22 +167,7 @@ func Sync(d Deps, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pushed := false
-	if d.Pusher != nil {
-		// Best-effort: the row is already durable; a relay outage must not
-		// fail a mark captured at the door. The parent de-duplicates by
-		// (student, status, instant), so a re-push of a duplicate row is safe.
-		err := d.Pusher.Push(r.Context(), fanout.Event{
-			DeviceID: deviceID, StudentID: req.StudentID, Status: req.Status, MarkedAt: req.MarkedAt,
-		})
-		if err != nil {
-			log.Printf("sync: fan-out failed for student %s: %v", req.StudentID, err)
-		} else {
-			pushed = true
-		}
-	}
-
-	note := "row persisted; parent fan-out best-effort"
+	note := "row persisted; parents receive it on their next events poll"
 	if !inserted {
 		note = "duplicate of an already-stored row; no second record"
 	}
@@ -194,7 +175,6 @@ func Sync(d Deps, w http.ResponseWriter, r *http.Request) {
 		"accepted":  true,
 		"stored":    true,
 		"duplicate": !inserted,
-		"pushed":    pushed,
 		"student":   req.StudentID,
 		"note":      note,
 	})

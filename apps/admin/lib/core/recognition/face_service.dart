@@ -15,8 +15,13 @@ class FaceService {
   Future<bool> isRegistered(String studentId) =>
       FaceVerification.instance.isFaceRegistered(studentId);
 
-  /// Registers the captured photo as this student's door sample
-  /// (replaces any previous sample for the slot).
+  /// Registers the captured photo as this student's door sample.
+  ///
+  /// The plugin throws 'A face record with ID ... and imageId ... already
+  /// exists' for a repeated (id, imageId) pair BEFORE it honors `replace` -
+  /// a constant imageId would brick every re-enrollment. A unique per-call
+  /// imageId sidesteps that; true replacement is delete-then-register at
+  /// the call site, ordered non-destructively.
   Future<void> register({
     required String studentId,
     required String imagePath,
@@ -25,7 +30,7 @@ class FaceService {
       FaceVerification.instance.registerFromImagePath(
         id: studentId,
         imagePath: imagePath,
-        imageId: 'door_enrollment',
+        imageId: 'enroll_${DateTime.now().millisecondsSinceEpoch}',
         name: name,
         replace: true,
       );

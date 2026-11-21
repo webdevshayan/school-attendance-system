@@ -9,8 +9,9 @@ import 'pairing_preferences.dart';
 import 'pairing_service.dart';
 
 /// Polls the server's events feed for the paired student and feeds every
-/// payload into the [PushHandler] - the exact seam a live push channel will
-/// use, so switching to Nitroping later changes nothing downstream.
+/// payload into the [PushHandler]. This poll IS the live channel (free,
+/// cursor based, no third-party relay) - the handler seam stays so any
+/// future transport can feed it unchanged.
 ///
 /// Delivery is cursor based: each poll resumes from the last delivered row
 /// id, so events are never re-broadcast after an app restart (the parent

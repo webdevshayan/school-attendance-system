@@ -1,6 +1,6 @@
 # school-attendance-system
 
-A 100% offline-first, low-latency attendance system for schools. A door-side **Admin App** recognises faces on-device and marks attendance into a local SQLite database; queued records sync to Turso Cloud the moment connectivity returns, and every sync fires a push notification to the child's **Parent App**.
+A 100% offline-first, low-latency attendance system for schools. A door-side **Admin App** recognises faces on-device and marks attendance into a local SQLite database; queued records sync to Turso Cloud the moment connectivity returns, and parents see each mark live through their app's cursor poll of the events feed.
 
 ```
 Face at door ──▶ /apps/admin (Flutter)
@@ -8,16 +8,16 @@ Face at door ──▶ /apps/admin (Flutter)
                  ├─ attendance row → local SQLite (libsql_dart)
                  └─ online? → POST /api/sync ──▶ /server (Go, Vercel)
                                                  ├─ writes to Turso Cloud
-                                                 └─ triggers push (Nitroping)
+                                                 └─ GET /api/events (cursor feed)
                                                         ──▶ /apps/parent (Flutter)
-                                                             visual dashboard
+                                                             live dashboard
 ```
 
 | Component | Path | Status |
 | --- | --- | --- |
 | Admin App (Flutter, door-side capture) | `apps/admin` | Phase 2: camera + FaceNet recognition + libsql_dart queue; Phase 4: signed sync + device registration; Phase 5: pairing-code minting on the Enroll page |
 | Parent App (Flutter, dashboard + push) | `apps/parent` | Phase 3: dashboard + local cache; Phase 5: pairing flow + live events feed into the push seam |
-| Serverless API (Go on Vercel) | `server` | **Live**: `/api/health`, signed `/api/sync` (Turso + de-dup), `/api/register`, `/api/codes`, `/api/pair`, `/api/events`, fan-out seam |
+| Serverless API (Go on Vercel) | `server` | **Live**: `/api/health`, signed `/api/sync` (Turso + de-dup), `/api/register`, `/api/codes`, `/api/pair`, `/api/events` cursor feed |
 | CI/CD | `.github/workflows` | Both pipelines live + Go test gate on PRs |
 
 ## Roadmap
@@ -25,13 +25,13 @@ Face at door ──▶ /apps/admin (Flutter)
 - **Phase 1 — Scaffold & pipelines (landed):** monorepo layout, Flutter boilerplate for both apps, Go API stub on Vercel, `build_apks.yml` + `deploy_server.yml`.
 - **Phase 2 — Admin core (landed):** camera preview, on-device recognition (`face_verification`, bundled FaceNet TFLite), offline attendance writes via `libsql_dart`, background sync to `/api/sync`.
 - **Phase 3 — Parent core (landed):** engaging dashboard (today status, event timeline, weekly summary), local SQLite cache (sqflite, de-duplicated), transport-agnostic push handling.
-- **Phase 4 — Backend integration (landed):** signed requests (HMAC-SHA256 headers + 5-minute replay window), device registration allowlist, Turso persistence with server-side de-dup, best-effort Nitroping push fan-out seam.
-- **Phase 5 — Pairing & delivery (landed):** door-minted pairing codes (7-day TTL, multi-use), guardian device registry (tokens stored as SHA-256 only), `GET /api/events` cursor feed with per-student isolation — parents see attendance live via polling; switching to Nitroping push later needs only relay credentials, the `PushHandler` seam stays.
-- **Next — live push & polish:** Nitroping relay credentials + parent-side push receiver (poller stays as fallback), guardian management UI (revoke/reissue codes), multi-school tenancy if needed.
+- **Phase 4 — Backend integration (landed):** signed requests (HMAC-SHA256 headers + 5-minute replay window), device registration allowlist, Turso persistence with server-side de-dup.
+- **Phase 5 — Pairing & delivery (landed):** door-minted pairing codes (7-day TTL, multi-use), guardian device registry (tokens stored as SHA-256 only), `GET /api/events` cursor feed with per-student isolation — parents see attendance live via the cursor poll, the official free channel (no relay credentials, nothing external to configure).
+- **Next — polish:** guardian management UI (revoke/reissue codes), multi-school tenancy if needed.
 
 ## CI/CD & storage hygiene
 
-- **`build_apks.yml`** builds **both** Flutter apps on every PR (Java 17 + stable Flutter), runs `flutter analyze` and the smoke tests, uploads release APKs with **`retention-days: 1`**, and a final job purges any artifact older than 24 h via the API. No heavy file ever lives in the repo or on the runners beyond a single build. The admin job additionally provisions a Rust toolchain (`libsql_dart` ships a native core via Dart native assets) and patches the generated Android manifest with CAMERA/INTERNET permissions.
+- **`build_apks.yml`** builds **both** Flutter apps on every PR (Java 17 + stable Flutter), runs `flutter analyze` and the smoke tests, uploads release APKs with **`retention-days: 1`** (the PR-review convenience), and a final job purges any artifact older than 24 h via the API. On merges to `main` touching `apps/**` a release job additionally publishes **admin-app.apk + parent-app.apk as permanent GitHub Release assets** (`apk-<date>-run<run_number>` tags, notes from the head commit) — release assets never expire. No heavy file ever lives in the repo or on the runners beyond a single build. The admin job additionally provisions a Rust toolchain (`libsql_dart` ships a native core via Dart native assets) and patches the generated Android manifest with CAMERA/INTERNET permissions.
 - **`deploy_server.yml`** deploys `server/` to Vercel production on merges to `main`; it fails loudly if the Vercel secrets are missing.
 - Flutter `android/` platform folders are intentionally **not committed** — CI runs `flutter create . --platforms android` so every build is generated against the exact Flutter version that compiles it, then patches in the CAMERA/INTERNET permissions, gradle tolerances and the lint-task disable (decided in Phase 2: keep them generated to stay light; revisit if the patch step grows).
 - No tokens, keys or `.env` files are ever committed — the root `.gitignore` blocks them.
@@ -48,6 +48,5 @@ Face at door ──▶ /apps/admin (Flutter)
 | `SYNC_SIGNING_SECRET` | `build_apks.yml` (admin), `smoke_test.yml` | HMAC secret shared with the server; baked into the APK via `--dart-define` and used to sign live E2E requests |
 | `TURSO_DATABASE_URL` | `deploy_server.yml` | Turso database URL (`libsql://…` is fine - the client normalizes it); **bridged into Vercel production env on every deploy** |
 | `TURSO_AUTH_TOKEN` | `deploy_server.yml` | Turso auth token; **bridged into Vercel production env on every deploy** |
-| `NITROPING_WEBHOOK_URL` / `NITROPING_API_KEY` | `deploy_server.yml` | optional push relay; bridged when present, skipped otherwise |
 
-Deploy-time env handling: the Turso (and optional Nitroping) credentials live as **Actions secrets**; every production deploy pushes them into the Vercel project env (`vercel env rm/add`), so rotating a secret here propagates on the next deploy. Values are passed via flags/env, never printed. The deploy step also **verifies `/api/health` after every deploy** and fails the job if production is not serving (a build can succeed and still be runtime-broken - PR #6 lesson). `SYNC_SIGNING_SECRET` must additionally exist as a **Vercel** env var (set once; it validates request signatures at runtime).
+Deploy-time env handling: the Turso credentials live as **Actions secrets**; every production deploy pushes them into the Vercel project env (`vercel env rm/add`), so rotating a secret here propagates on the next deploy. Values are passed via flags/env, never printed. The deploy step also **verifies `/api/health` after every deploy** and fails the job if production is not serving (a build can succeed and still be runtime-broken - PR #6 lesson). `SYNC_SIGNING_SECRET` must additionally exist as a **Vercel** env var (set once; it validates request signatures at runtime).

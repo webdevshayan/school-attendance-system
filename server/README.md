@@ -1,12 +1,12 @@
 # Server (Go on Vercel + Turso)
 
-Serverless API deployed to Vercel. Phase 4 is live: signed requests, device allowlist, Turso persistence and best-effort push fan-out. Phase 5 adds the pairing layer: door-minted codes, a guardian device registry and the parent events feed.
+Serverless API deployed to Vercel. Phase 4 is live: signed requests, device allowlist and Turso persistence. Phase 5 adds the pairing layer: door-minted codes, a guardian device registry and the parent events feed — which IS the parent delivery channel (free cursor polling, no relay dependency).
 
 | Endpoint | Method | Purpose |
 | --- | --- | --- |
-| `/api/health` | GET | Liveness + which integrations are configured (`signing`, `turso`, `fanout` fields) |
+| `/api/health` | GET | Liveness + which integrations are configured (`signing`, `turso`, `push` fields) |
 | `/api/register` | POST | Adds a signed device to the sync allowlist (idempotent upsert) |
-| `/api/sync` | POST | Validates, de-duplicates and persists one attendance row; fans out a push |
+| `/api/sync` | POST | Validates, de-duplicates and persists one attendance row; parents receive it on their next events poll |
 | `/api/codes` | POST | Mints a parent-pairing code for a student (signed, registered door devices only) |
 | `/api/pair` | POST | Redeems a code: binds a parent install to the student, returns its bearer token once. Rate-limited per client IP (default 10/min, `PAIR_RATE_LIMIT`; `429` + `Retry-After` when exceeded) |
 | `/api/events` | GET | Cursor feed of a paired student's attendance rows (Bearer token; 100 rows max) |
@@ -17,7 +17,7 @@ Serverless API deployed to Vercel. Phase 4 is live: signed requests, device allo
 - **Redemption**: the parent app posts `{code, label, platform}` to `POST /api/pair` — the code itself is the credential. Unknown → `400`; expired → `410`. Success returns `{student_id, token}` **exactly once**; the server stores only the token's SHA-256 (`parent_devices.token_hash`).
 - **Feed**: `GET /api/events?since=<id>` with `Authorization: Bearer <token>` returns the paired student's rows oldest-first with a `cursor`; payloads reuse the `/api/sync` wire shape (`device_id`, `student_id`, `status`, `marked_at`), so the parent app's `PushHandler` consumes them unchanged. Rows for other students never cross the boundary.
 - **Abuse resistance**: `/api/pair` is rate-limited per client IP (default 10 attempts/min; `PAIR_RATE_LIMIT` tunes or disables it; breaches answer `429` + `Retry-After`). The limiter is an in-memory fixed window per serverless instance — no cross-instance state exists on this runtime — so it makes grinding slow and observable; the code's entropy and 7-day TTL remain the real bound.
-- This is the delivery channel that works today; when the Nitroping relay credentials land, the same `parent_devices` registry drives real push fan-out.
+- The poll is the official delivery channel by design: free, serverless-friendly, and with zero third-party relay credentials to rotate.
 
 
 ## Wire contract (both POST endpoints)
@@ -43,13 +43,11 @@ X-Sync-Signature: <hex HMAC-SHA256(secret, deviceId \n timestamp \n body)>
 | `SYNC_SIGNING_SECRET` | yes | HMAC secret shared with the admin APK (which gets it at compile time via `--dart-define`) |
 | `TURSO_DATABASE_URL` | yes | libSQL database URL |
 | `TURSO_AUTH_TOKEN` | yes | libSQL auth token |
-| `NITROPING_WEBHOOK_URL` | optional | Push relay endpoint; fan-out is skipped when unset |
-| `NITROPING_API_KEY` | optional | Push relay bearer token |
 | `PAIR_RATE_LIMIT` | optional | `/api/pair` attempts per client IP per minute (default `10`, `0` disables the limiter) |
 
 ## Layout & the Vercel Go runtime contract
 
-All logic lives in `pkg/` (authn, turso, store, fanout, handlers) — `go test ./pkg/...` covers it in CI. Two serving shapes share it, both dispatching through `pkg/routes`:
+All logic lives in `pkg/` (authn, turso, store, handlers) — `go test ./pkg/...` covers it in CI. Two serving shapes share it, both dispatching through `pkg/routes`:
 
 - **Primary — Framework Preset `Go`**: Vercel detects the project-root `go.mod` + the `main.go` entrypoint and builds **one server binary**. The entrypoint contract ([docs/functions/runtimes/go](https://vercel.com/docs/functions/runtimes/go)) is strict: `package main`, listening on the `PORT` environment variable. `main.go` is exactly that — which also makes it the local dev server (`go run .` from `server/`).
 - **Fallback — Framework Preset `Other`**: the `api/*.go` files are thin adapters forming **one `package handler`**, each exporting a **distinctly named** function with the standard signature (`Health`, `Sync`, `Register`). In module mode the runtime compiles the package per route and renames the handler it matches by *signature* — per-file exports must stay distinct and `pkg/handlers` calls stay qualified. Stdlib only, no framework; Turso is reached over its HTTP pipeline API (`pkg/turso`) because the official SDK needs a native libsql core this runtime can't run.
@@ -62,6 +60,6 @@ All logic lives in `pkg/` (authn, turso, store, fanout, handlers) — `go test .
 
 Automatic via `.github/workflows/deploy_server.yml` on merges to `main` (PRs run the Go test gate first: gofmt + vet + `go test ./pkg/...`). Requires the repo secrets `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`; the workflow fails loudly with instructions if any are missing.
 
-## Next: parent fan-out channel
+## Parent delivery channel
 
-`pkg/fanout` posts events (wire shape identical to `/api/sync`) to the Nitroping relay when `NITROPING_WEBHOOK_URL` is set; the parent app's `PushHandler` is already the receiving seam, so wiring the live channel needs no app change — only relay credentials and (if routing by child) a guardian mapping.
+Parents poll `GET /api/events?since=<cursor>` with their pairing bearer token (30 s cadence in the parent app). The cursor feed is the live channel by design — free, serverless-friendly, no relay credentials — and the parent app's `PushHandler` stays the transport-agnostic receiving seam, so any future transport (websocket, FCM, …) could feed it unchanged.

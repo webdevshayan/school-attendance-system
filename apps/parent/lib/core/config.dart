@@ -18,8 +18,8 @@ class ChildConfig {
   /// Display name shown on the dashboard hero card.
   static const String childName = 'Your child';
 
-  /// How often the paired install polls the events feed. A live push channel
-  /// (Nitroping) will replace polling when relay credentials exist; the
-  /// payload flow into PushHandler stays identical either way.
+  /// How often the paired install polls the events feed. Polling IS the
+  /// live channel by design (free, no relay credentials, serverless-safe) -
+  /// 30 s keeps a guardian within half a minute of the door event.
   static const Duration pollInterval = Duration(seconds: 30);
 }

@@ -95,8 +95,6 @@ jobs:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
           SYNC_SIGNING_SECRET: ${{ secrets.SYNC_SIGNING_SECRET }}
-          NITROPING_WEBHOOK_URL: ${{ secrets.NITROPING_WEBHOOK_URL }}
-          NITROPING_API_KEY: ${{ secrets.NITROPING_API_KEY }}
         run: |
           sync_env() {
             name="$1"; val="$2"; required="$3"
@@ -106,7 +104,7 @@ jobs:
                   echo "::error::Missing repo secret '$name' - add it under Settings > Secrets and variables > Actions"
                   missing=1
                 else
-                  echo "optional $name not set in Actions secrets - skipping ($target; push fan-out stays disabled)"
+                  echo "optional $name not set in Actions secrets - skipping ($target)"
                 fi
                 continue
               fi
@@ -130,8 +128,6 @@ jobs:
           sync_env TURSO_DATABASE_URL "$TURSO_DATABASE_URL" required
           sync_env TURSO_AUTH_TOKEN "$TURSO_AUTH_TOKEN" required
           sync_env SYNC_SIGNING_SECRET "$SYNC_SIGNING_SECRET" required
-          sync_env NITROPING_WEBHOOK_URL "$NITROPING_WEBHOOK_URL" optional
-          sync_env NITROPING_API_KEY "$NITROPING_API_KEY" optional
           exit $missing
 
       # INCIDENT CLASS CLOSED 2026-11-21. Three production failures shared one

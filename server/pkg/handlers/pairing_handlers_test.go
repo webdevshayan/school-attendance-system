@@ -45,7 +45,7 @@ func mintCodeReq(t *testing.T, d Deps, deviceID, body, secret string) *httptest.
 
 func TestMintCodeIssuesTypedCodeToRegisteredDevice(t *testing.T) {
 	st := newFakeStore()
-	d := fullDeps(st, &fakePusher{})
+	d := fullDeps(st)
 	if err := st.UpsertDevice(context.Background(), store.Device{DeviceID: "door-1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestMintCodeIssuesTypedCodeToRegisteredDevice(t *testing.T) {
 
 func TestMintCodeRequiresSignedRegisteredDevice(t *testing.T) {
 	st := newFakeStore()
-	d := fullDeps(st, &fakePusher{})
+	d := fullDeps(st)
 
 	// Unregistered device, valid signature.
 	w := mintCodeReq(t, d, "door-x", `{"student_id":"s1"}`, testSecret)
@@ -120,7 +120,7 @@ func TestMintCodeRequiresSignedRegisteredDevice(t *testing.T) {
 
 func TestPairRedeemsCodeAndStoresOnlyTokenHash(t *testing.T) {
 	st := newFakeStore()
-	d := fullDeps(st, &fakePusher{})
+	d := fullDeps(st)
 	future := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339)
 	if err := st.MintCode(context.Background(), store.PairingCode{
 		Code: "ABCD2345", StudentID: "s1", ExpiresAt: future,
@@ -164,7 +164,7 @@ func TestPairRedeemsCodeAndStoresOnlyTokenHash(t *testing.T) {
 
 func TestPairRejectsUnknownExpiredAndEmptyCodes(t *testing.T) {
 	st := newFakeStore()
-	d := fullDeps(st, &fakePusher{})
+	d := fullDeps(st)
 
 	if w := pairReq(t, d, `{"code":"ZZZZ9999"}`); w.Code != http.StatusBadRequest {
 		t.Fatalf("unknown code = %d, want 400", w.Code)
@@ -187,7 +187,7 @@ func TestPairRejectsUnknownExpiredAndEmptyCodes(t *testing.T) {
 
 func TestEventsFeedReturnsRowsAndHonorsCursor(t *testing.T) {
 	st := newFakeStore()
-	d := fullDeps(st, &fakePusher{})
+	d := fullDeps(st)
 	if err := st.UpsertParentDevice(context.Background(), store.ParentDevice{
 		TokenHash: tokenHash("tok-1"), StudentID: "s1",
 	}); err != nil {
@@ -236,7 +236,7 @@ func TestEventsFeedReturnsRowsAndHonorsCursor(t *testing.T) {
 
 func TestEventsFeedRejectsBadTokensAndMethods(t *testing.T) {
 	st := newFakeStore()
-	d := fullDeps(st, &fakePusher{})
+	d := fullDeps(st)
 	if err := st.UpsertParentDevice(context.Background(), store.ParentDevice{
 		TokenHash: tokenHash("tok-1"), StudentID: "s1",
 	}); err != nil {

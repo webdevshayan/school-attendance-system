@@ -3,7 +3,7 @@
 Flutter app for parents. Phase 3 wires the real experience:
 
 1. **Engaging visual dashboard** — today's check-in hero card (green/orange gradient), the day's event timeline, and a weekly presence summary (`X/7 days this week`).
-2. **Delivery into the dashboard** — `PushHandler` accepts an attendance payload (same wire shape as `/api/sync`: `student_id`, `status`, `marked_at`, …), validates it, de-duplicates it into a local SQLite cache (sqflite, unique key on student/status/instant) and broadcasts it to the dashboard over a `Stream`. Phase 5 feeds it two ways: the **events poller** (paired installs poll `GET /api/events` with their bearer token, resumable cursor, no re-delivery) and — once the school supplies relay credentials — the live **Nitroping push**; both use the same seam, so nothing downstream changes.
+2. **Delivery into the dashboard** — `PushHandler` accepts an attendance payload (same wire shape as `/api/sync`: `student_id`, `status`, `marked_at`, …), validates it, de-duplicates it into a local SQLite cache (sqflite, unique key on student/status/instant) and broadcasts it to the dashboard over a `Stream`. It is fed by the **events poller** — paired installs poll `GET /api/events` with their bearer token (resumable cursor, no re-delivery). That poll IS the live channel by design (free, no relay credentials); the seam stays transport-agnostic.
 3. A **debug hook** ("Simulate a push") feeds a sample payload through the real pipeline so the dashboard can be exercised before the live channel exists.
 
 ## Pairing (Phase 5)
