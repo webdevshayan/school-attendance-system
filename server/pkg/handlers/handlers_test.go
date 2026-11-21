@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/webdevshayan/school-attendance-system/server/pkg/authn"
-	"github.com/webdevshayan/school-attendance-system/server/pkg/fanout"
 	"github.com/webdevshayan/school-attendance-system/server/pkg/store"
 )
 
@@ -98,24 +97,11 @@ func (f *fakeStore) EventsSince(_ context.Context, studentID string, sinceID int
 	return events, nil
 }
 
-type fakePusher struct {
-	events []fanout.Event
-	err    error
-}
-
-func (f *fakePusher) Push(_ context.Context, e fanout.Event) error {
-	if f.err != nil {
-		return f.err
-	}
-	f.events = append(f.events, e)
-	return nil
-}
-
 const testSecret = "phase4-test-secret"
 
 // fullDeps returns a configured Deps wired to fakes.
-func fullDeps(st *fakeStore, p fanout.Pusher) Deps {
-	return Deps{Secret: testSecret, Store: st, Pusher: p}
+func fullDeps(st *fakeStore) Deps {
+	return Deps{Secret: testSecret, Store: st}
 }
 
 // signed builds a POST with the three signing headers, exactly the way the
@@ -142,10 +128,9 @@ func bodyMap(t *testing.T, w *httptest.ResponseRecorder) map[string]any {
 	return m
 }
 
-func TestRegisterThenSyncPersistsAndPushes(t *testing.T) {
+func TestRegisterThenSyncPersists(t *testing.T) {
 	st := newFakeStore()
-	push := &fakePusher{}
-	d := fullDeps(st, push)
+	d := fullDeps(st)
 
 	w, r := signed(t, "/api/register", "door-1", `{"device_id":"door-1","label":"front door"}`, testSecret)
 	Register(d, w, r)
@@ -160,19 +145,16 @@ func TestRegisterThenSyncPersistsAndPushes(t *testing.T) {
 		t.Fatalf("sync = %d (%s)", w.Code, w.Body.String())
 	}
 	m := bodyMap(t, w)
-	if m["stored"] != true || m["duplicate"] != false || m["pushed"] != true {
+	if m["stored"] != true || m["duplicate"] != false {
 		t.Errorf("sync payload = %v", m)
 	}
 	if len(st.rows) != 1 || st.rows[0].StudentID != "s1" || st.rows[0].DeviceID != "door-1" {
 		t.Errorf("stored rows = %+v", st.rows)
 	}
-	if len(push.events) != 1 || push.events[0].StudentID != "s1" || push.events[0].Status != "in" {
-		t.Errorf("pushed events = %+v", push.events)
-	}
 }
 
 func TestSyncRejectsUnregisteredDevice(t *testing.T) {
-	d := fullDeps(newFakeStore(), &fakePusher{})
+	d := fullDeps(newFakeStore())
 	w, r := signed(t, "/api/sync", "door-x", `{"student_id":"s1","status":"in","marked_at":"2026-11-20T08:00:00Z"}`, testSecret)
 	Sync(d, w, r)
 	if w.Code != http.StatusForbidden {
@@ -184,7 +166,7 @@ func TestSyncRejectsUnregisteredDevice(t *testing.T) {
 }
 
 func TestSyncRejectsBadAndMissingSignatures(t *testing.T) {
-	d := fullDeps(newFakeStore(), &fakePusher{})
+	d := fullDeps(newFakeStore())
 	st := newFakeStore()
 	_ = st.UpsertDevice(context.Background(), store.Device{DeviceID: "door-1"})
 
@@ -234,7 +216,7 @@ func TestSyncRequiresConfigAndNamesMissingVars(t *testing.T) {
 }
 
 func TestSyncValidatesBody(t *testing.T) {
-	d := fullDeps(newFakeStore(), &fakePusher{})
+	d := fullDeps(newFakeStore())
 	cases := []struct {
 		name, body string
 		want       int
@@ -259,10 +241,9 @@ func TestSyncValidatesBody(t *testing.T) {
 	}
 }
 
-func TestSyncDeDuplicatesButKeepsPushing(t *testing.T) {
+func TestSyncDeDuplicatesAndKeepsAccepting(t *testing.T) {
 	st := newFakeStore()
-	push := &fakePusher{}
-	d := fullDeps(st, push)
+	d := fullDeps(st)
 	_ = st.UpsertDevice(context.Background(), store.Device{DeviceID: "door-1"})
 	row := `{"device_id":"door-1","student_id":"s1","status":"in","marked_at":"2026-11-20T08:15:00Z"}`
 
@@ -278,35 +259,17 @@ func TestSyncDeDuplicatesButKeepsPushing(t *testing.T) {
 	if len(st.rows) != 1 {
 		t.Errorf("rows stored = %d, want 1", len(st.rows))
 	}
-	// Both attempts push: a retry may be the only chance to notify parents,
-	// and the parent app de-duplicates by (student, status, instant).
-	if len(push.events) != 2 {
-		t.Errorf("pushed events = %d, want 2", len(push.events))
-	}
-}
-
-func TestSyncPushFailureStillAcceptsRow(t *testing.T) {
-	st := newFakeStore()
-	d := fullDeps(st, &fakePusher{err: fmt.Errorf("relay down")})
-	_ = st.UpsertDevice(context.Background(), store.Device{DeviceID: "door-1"})
-
-	w, r := signed(t, "/api/sync", "door-1", `{"student_id":"s1","status":"out","marked_at":"2026-11-20T15:00:00Z"}`, testSecret)
-	Sync(d, w, r)
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("sync = %d, want 202 despite relay failure", w.Code)
-	}
-	if bodyMap(t, w)["pushed"] != false {
-		t.Errorf("payload should report pushed=false")
-	}
-	if len(st.rows) != 1 {
-		t.Errorf("row must still be stored")
+	// A retry must stay accepted (202): the parents' cursor poll of
+	// /api/events delivers the row regardless of which sync attempt won.
+	if w2.Code != http.StatusAccepted {
+		t.Errorf("retry code = %d, want 202", w2.Code)
 	}
 }
 
 func TestSyncStorageFailureIs502(t *testing.T) {
 	st := newFakeStore()
 	st.insertErr = fmt.Errorf("db offline")
-	d := fullDeps(st, &fakePusher{})
+	d := fullDeps(st)
 	_ = st.UpsertDevice(context.Background(), store.Device{DeviceID: "door-1"})
 
 	w, r := signed(t, "/api/sync", "door-1", `{"student_id":"s1","status":"in","marked_at":"2026-11-20T08:00:00Z"}`, testSecret)
@@ -321,7 +284,7 @@ func TestSyncStorageFailureIs502(t *testing.T) {
 func TestSyncSchemaInitFailureIs502(t *testing.T) {
 	st := newFakeStore()
 	st.initErr = fmt.Errorf("no such table")
-	d := fullDeps(st, &fakePusher{})
+	d := fullDeps(st)
 	_ = st.UpsertDevice(context.Background(), store.Device{DeviceID: "door-1"})
 
 	w, r := signed(t, "/api/sync", "door-1", `{"student_id":"s1","status":"in","marked_at":"2026-11-20T08:00:00Z"}`, testSecret)
@@ -334,14 +297,14 @@ func TestSyncSchemaInitFailureIs502(t *testing.T) {
 func TestSyncRejectsWrongMethod(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/sync", nil)
-	Sync(fullDeps(newFakeStore(), &fakePusher{}), w, r)
+	Sync(fullDeps(newFakeStore()), w, r)
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET sync = %d, want 405", w.Code)
 	}
 }
 
 func TestRegisterValidatesDeviceIdentity(t *testing.T) {
-	d := fullDeps(newFakeStore(), &fakePusher{})
+	d := fullDeps(newFakeStore())
 
 	w, r := signed(t, "/api/register", "door-1", `{"device_id":"door-2"}`, testSecret)
 	Register(d, w, r)
@@ -370,14 +333,14 @@ func TestHealthReportsConfiguration(t *testing.T) {
 	if m["status"] != "ok" || m["service"] != "school-attendance-server" {
 		t.Errorf("health base shape changed: %v", m)
 	}
-	if m["turso"] != "missing" || m["signing"] != false || m["fanout"] != "disabled" {
+	if m["turso"] != "missing" || m["signing"] != false || m["push"] != "polling" {
 		t.Errorf("bare health = %v", m)
 	}
 
 	w2 := httptest.NewRecorder()
-	Health(fullDeps(newFakeStore(), &fakePusher{}), w2, r)
+	Health(fullDeps(newFakeStore()), w2, r)
 	m2 := bodyMap(t, w2)
-	if m2["turso"] != "configured" || m2["signing"] != true || m2["fanout"] != "configured" {
+	if m2["turso"] != "configured" || m2["signing"] != true || m2["push"] != "polling" {
 		t.Errorf("configured health = %v", m2)
 	}
 }

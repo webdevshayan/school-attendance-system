@@ -3,10 +3,10 @@ import 'dart:async';
 import '../db/event_store.dart';
 import '../models/attendance_event.dart';
 
-/// Transport-agnostic push handler. Phase 4 wires the real push channel
-/// (server-side fan-out to the parents); until then payloads come from the
-/// debug hook on the dashboard. Every accepted payload flows:
-/// parse -> validate -> de-duplicate into the local store -> broadcast.
+/// Transport-agnostic push handler: every accepted attendance payload flows
+/// parse -> validate -> de-duplicate into the local store -> broadcast. The
+/// production transport is the events poller (the free live channel); the
+/// seam stays so any future transport can feed it unchanged.
 class PushHandler {
   PushHandler({required EventStore store}) : _store = store;
 
